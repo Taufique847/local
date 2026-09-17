@@ -1,0 +1,121 @@
+export type CallDirection = 'inbound' | 'outbound';
+
+export type CallStatus =
+  | 'initiated'
+  | 'ringing'
+  | 'in_progress'
+  | 'completed'
+  | 'failed'
+  | 'busy'
+  | 'no_answer'
+  | 'cancelled';
+
+export interface PhoneNumberCapabilities {
+  voice: boolean;
+  sms: boolean;
+}
+
+export interface BusinessPhoneNumber {
+  _id: string;
+  id?: string;
+  businessId: string;
+  provider: 'twilio';
+  phoneNumber: string;
+  phoneNumberSid?: string;
+  friendlyName?: string;
+  country: string;
+  capabilities: PhoneNumberCapabilities;
+  status: 'active' | 'inactive';
+  voiceWebhookUrl?: string;
+  smsWebhookUrl?: string;
+  isPrimary: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CallCustomer {
+  _id: string;
+  id?: string;
+  firstName: string;
+  lastName: string;
+  phone: string;
+  email?: string;
+  address?: {
+    street?: string;
+    city?: string;
+    state?: string;
+    zip?: string;
+  };
+}
+
+export interface CallPhoneNumber {
+  _id: string;
+  phoneNumber: string;
+  friendlyName?: string;
+}
+
+export interface CallLog {
+  _id: string;
+  id?: string;
+  businessId: string;
+  phoneNumberId?: CallPhoneNumber | string;
+  provider: 'twilio';
+  providerCallSid: string;
+  direction: CallDirection;
+  from: string;
+  to: string;
+  status: CallStatus;
+  startedAt: string;
+  answeredAt?: string;
+  endedAt?: string;
+  durationSeconds: number;
+  customerId?: CallCustomer | string;
+  leadId?: string;
+  appointmentId?: string;
+  notes?: string;
+  recordingUrl?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CallQuery {
+  page?: number;
+  limit?: number;
+  search?: string;
+  direction?: string;
+  status?: string;
+  date?: string; // YYYY-MM-DD
+}
+
+export interface PaginatedCallsResponse {
+  success: boolean;
+  calls: CallLog[];
+  total: number;
+  page: number;
+  totalPages: number;
+}
+
+export interface CallStats {
+  total: number;
+  inbound: number;
+  completed: number;
+  missed: number;
+}
+
+export interface AvailablePhoneNumber {
+  phoneNumber: string;
+  friendlyName: string;
+  locality?: string;
+  region?: string;
+  postalCode?: string;
+  capabilities: PhoneNumberCapabilities;
+}
+
+export interface TwilioConnectionStatus {
+  success: boolean;
+  configured: boolean;
+  connected: boolean;
+  accountName?: string;
+  status?: string;
+  message: string;
+}
