@@ -1,8 +1,9 @@
 import dotenv from 'dotenv';
 import path from 'path';
 
-// Load environment variables from .env file
+// Load environment variables from .env file (supports cwd as well as backend root)
 dotenv.config({ path: path.resolve(process.cwd(), '.env') });
+dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
 export interface AppConfig {
   port: number;
@@ -16,6 +17,10 @@ export interface AppConfig {
   twilioAuthToken?: string;
   twilioPhoneNumber?: string;
   twilioWebhookBaseUrl?: string;
+  stripeSecretKey?: string;
+  stripeWebhookSecret?: string;
+  voiceProvider: string;
+  openaiApiKey?: string;
 }
 
 const parsePort = (val: string | undefined, defaultPort: number): number => {
@@ -36,4 +41,8 @@ export const config: AppConfig = {
   twilioAuthToken: process.env.TWILIO_AUTH_TOKEN,
   twilioPhoneNumber: process.env.TWILIO_PHONE_NUMBER,
   twilioWebhookBaseUrl: process.env.TWILIO_WEBHOOK_BASE_URL || 'http://localhost:5000',
+  stripeSecretKey: process.env.STRIPE_SECRET_KEY,
+  stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET,
+  voiceProvider: process.env.VOICE_PROVIDER || 'mock',
+  openaiApiKey: process.env.OPENAI_API_KEY,
 };

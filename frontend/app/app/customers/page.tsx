@@ -25,11 +25,13 @@ import {
   Trash2, 
   Loader2,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  Sparkles
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import { Customer360Drawer } from '@/components/customers/customer-360-drawer';
 
 export default function CustomersPage() {
   const router = useRouter();
@@ -50,6 +52,10 @@ export default function CustomersPage() {
   // Modal state
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+
+  // Customer 360 Drawer State
+  const [selected360CustomerId, setSelected360CustomerId] = useState<string | null>(null);
+  const [is360Open, setIs360Open] = useState(false);
 
   // Check if ?action=new was passed in URL
   useEffect(() => {
@@ -270,7 +276,10 @@ export default function CustomersPage() {
                     return (
                       <tr
                         key={custId}
-                        onClick={() => router.push(`/app/customers/${custId}`)}
+                        onClick={() => {
+                          setSelected360CustomerId(custId);
+                          setIs360Open(true);
+                        }}
                         className="hover:bg-slate-50/80 cursor-pointer transition-colors group"
                       >
                         {/* Name */}
@@ -336,6 +345,19 @@ export default function CustomersPage() {
                         {/* Actions */}
                         <td className="py-3.5 px-4 text-right">
                           <div className="flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => {
+                                setSelected360CustomerId(custId);
+                                setIs360Open(true);
+                              }}
+                              className="h-8 px-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 text-xs font-semibold flex items-center gap-1"
+                              title="Open Customer 360 View"
+                            >
+                              <Sparkles className="w-3.5 h-3.5 text-blue-500" />
+                              <span>360</span>
+                            </Button>
                             <Button
                               variant="ghost"
                               size="sm"
@@ -420,6 +442,14 @@ export default function CustomersPage() {
         customer={selectedCustomer}
         onClose={() => setIsModalOpen(false)}
         onSaved={handleCustomerSaved}
+      />
+
+      {/* Customer 360 Interactive Drawer */}
+      <Customer360Drawer
+        customerId={selected360CustomerId}
+        isOpen={is360Open}
+        onClose={() => setIs360Open(false)}
+        onCustomerUpdated={fetchCustomers}
       />
     </DashboardShell>
   );

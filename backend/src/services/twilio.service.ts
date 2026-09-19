@@ -199,4 +199,18 @@ export class TwilioService {
     response.hangup();
     return response.toString();
   }
+
+  /**
+   * Generate Media Stream TwiML connecting inbound call to AI Voice Engine (M10).
+   */
+  public static generateMediaStreamTwiML(streamUrl: string, params: { from: string; to: string }): string {
+    const response = new twilio.twiml.VoiceResponse();
+    const connect = response.connect();
+    const stream = connect.stream({
+      url: streamUrl,
+    });
+    stream.parameter({ name: 'from', value: params.from });
+    stream.parameter({ name: 'to', value: params.to });
+    return response.toString();
+  }
 }

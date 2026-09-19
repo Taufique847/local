@@ -30,8 +30,16 @@ export class WebhookController {
       // Record call log and resolve business
       const { business } = await CallService.handleInboundWebhook(req.body);
 
-      // Generate TwiML response
-      const twiml = TwilioService.generateWelcomeTwiML(business?.name || 'our business');
+      // Generate TwiML response (Media Stream for M10 voice or standard greeting)
+      const baseUrl = config.twilioWebhookBaseUrl || 'http://localhost:5000';
+      const wsUrl = baseUrl.replace(/^http/, 'ws') + '/api/voice/media-stream';
+
+      let twiml: string;
+      if (req.query.stream === 'true' || req.body.Stream === 'true') {
+        twiml = TwilioService.generateMediaStreamTwiML(wsUrl, { from: From, to: To });
+      } else {
+        twiml = TwilioService.generateWelcomeTwiML(business?.name || 'our business');
+      }
 
       res.set('Content-Type', 'text/xml');
       res.status(200).send(twiml);

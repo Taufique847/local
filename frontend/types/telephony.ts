@@ -74,8 +74,35 @@ export interface CallLog {
   appointmentId?: string;
   notes?: string;
   recordingUrl?: string;
+  outcome?: string;
+  aiHandled?: boolean;
+  transcript?: Array<{ role: 'assistant' | 'user' | 'system'; text: string; timestamp: string }>;
+  toolExecutions?: Array<{ toolName: string; arguments: any; result: any; durationMs: number; timestamp: string }>;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface CallAnalyticsData {
+  totalCalls: number;
+  inboundCalls: number;
+  outboundCalls: number;
+  answeredCalls: number;
+  missedCalls: number;
+  answerRate: number;
+  totalDurationSeconds: number;
+  averageDurationSeconds: number;
+  aiHandledCalls: number;
+  aiHandledPercentage: number;
+  conversions: {
+    appointmentsBooked: number;
+    leadsCaptured: number;
+    emergencyTransferred: number;
+    bookingRate: number;
+    leadCaptureRate: number;
+  };
+  outcomeDistribution: Record<string, number>;
+  sentimentDistribution: Record<string, number>;
+  peakHours: Array<{ hour: number; count: number }>;
 }
 
 export interface CallQuery {

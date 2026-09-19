@@ -59,12 +59,13 @@ export function DashboardShell({ children, title, subtitle }: DashboardShellProp
       <div className="min-h-screen bg-slate-50 flex text-slate-900 font-sans antialiased">
         {/* Persistent Desktop Sidebar & Mobile Drawer */}
         <Sidebar 
+          business={business}
           mobileOpen={mobileOpen} 
           onCloseMobile={() => setMobileOpen(false)} 
         />
 
-        {/* Main Content Area */}
-        <div className="flex-1 flex flex-col min-w-0 lg:pl-64">
+        {/* Main Content Area (no extra pl-64 since sidebar is in flex flow) */}
+        <div className="flex-1 flex flex-col min-w-0">
           <Header
             business={business}
             onOpenMobileMenu={() => setMobileOpen(true)}
@@ -72,7 +73,7 @@ export function DashboardShell({ children, title, subtitle }: DashboardShellProp
             subtitle={subtitle}
           />
 
-          <main className="flex-1 p-4 sm:p-6 md:p-8 max-w-7xl w-full mx-auto">
+          <main className="flex-1 p-4 sm:p-6 lg:p-8 w-full max-w-7xl mx-auto">
             {children}
           </main>
         </div>

@@ -207,7 +207,8 @@ export class CallService {
   public static async simulateInboundCall(
     businessId: Types.ObjectId | string,
     callerPhone: string,
-    durationSeconds: number = 45
+    durationSeconds: number = 45,
+    options: { transcript?: any[]; outcome?: string; notes?: string } = {}
   ): Promise<ICallLog> {
     const business = await Business.findById(businessId);
     if (!business) {
@@ -232,6 +233,30 @@ export class CallService {
 
     const callSid = `CA_sim_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
 
+    const defaultConvo = {
+      summary: 'Caller reported upstairs AC blowing warm air in 95°F heat. Alex AI qualified urgency, verified Dallas 75201 service zone, and successfully booked a Saturday morning emergency diagnostic slot ($89 diagnostic credited to repair).',
+      sentiment: 'positive' as const,
+      outcome: 'appointment_booked',
+      notes: 'Emergency AC diagnostic booked for Saturday 9:00 AM - 11:00 AM. Senior tech Mike assigned. Confirmation SMS dispatched.',
+      transcript: [
+        { role: 'assistant', text: 'Thank you for calling Arctic Air HVAC! My name is Alex, your 24/7 assistant. How can I help you today?', timestamp: new Date(Date.now() - durationSeconds * 1000) },
+        { role: 'user', text: "Hi Alex! My upstairs AC unit just started blowing warm air, and it's 95 degrees outside. Can you get someone out here soon?", timestamp: new Date(Date.now() - (durationSeconds - 8) * 1000) },
+        { role: 'assistant', text: "I completely understand how urgent that is in this heat! May I please confirm your street address or zip code so I can check technician availability in your neighborhood?", timestamp: new Date(Date.now() - (durationSeconds - 16) * 1000) },
+        { role: 'user', text: "Yes, I'm at 742 Evergreen Terrace in Dallas, zip code 75201.", timestamp: new Date(Date.now() - (durationSeconds - 24) * 1000) },
+        { role: 'assistant', text: "Thank you! We have certified technicians in 75201. I have an opening tomorrow morning between 9:00 AM and 11:00 AM with Mike, our senior HVAC specialist. Would that work for you?", timestamp: new Date(Date.now() - (durationSeconds - 32) * 1000) },
+        { role: 'user', text: "Yes, 9:00 AM to 11:00 AM works great! What is your diagnostic fee?", timestamp: new Date(Date.now() - (durationSeconds - 40) * 1000) },
+        { role: 'assistant', text: "Our comprehensive diagnostic fee is $89, which is 100% credited toward the repair if you decide to proceed with us. Shall I lock that in for you?", timestamp: new Date(Date.now() - (durationSeconds - 48) * 1000) },
+        { role: 'user', text: "Yes, please lock that in. Thank you for making this so easy!", timestamp: new Date(Date.now() - (durationSeconds - 54) * 1000) },
+        { role: 'assistant', text: "Done! Your appointment is locked for tomorrow between 9 AM and 11 AM. I've also dispatched a confirmation SMS with tracking to your mobile. Stay cool and have a wonderful day!", timestamp: new Date(Date.now() - (durationSeconds - 58) * 1000) },
+      ],
+      toolExecutions: [
+        { toolName: 'verify_service_territory', arguments: { zipCode: '75201', trade: 'hvac' }, result: { inTerritory: true, territoryName: 'Dallas Metro Fleet' }, durationMs: 92 },
+        { toolName: 'get_available_technicians', arguments: { zipCode: '75201', requestedWindow: 'morning' }, result: { availableSlots: 3, assignedTech: 'Mike R. (Senior Master Tech)' }, durationMs: 135 },
+        { toolName: 'book_calendar_appointment', arguments: { time: '09:00 AM - 11:00 AM', customerPhone: callerPhone, serviceType: 'Emergency AC Diagnostic' }, result: { appointmentId: 'apt_sim_7482', status: 'confirmed', priceEstimate: '$89' }, durationMs: 215 },
+        { toolName: 'dispatch_confirmation_sms', arguments: { to: callerPhone, template: 'booking_confirmed' }, result: { messageSid: 'SM_sim_84920', status: 'delivered' }, durationMs: 180 },
+      ],
+    };
+
     const call = await CallLog.create({
       businessId,
       phoneNumberId: businessPhone?._id || null,
@@ -246,7 +271,13 @@ export class CallService {
       endedAt: new Date(),
       durationSeconds,
       customerId: customer ? customer._id : null,
-      notes: 'Simulated inbound test call for telephony verification.',
+      aiHandled: true,
+      summary: defaultConvo.summary,
+      sentiment: defaultConvo.sentiment,
+      transcript: options.transcript && options.transcript.length > 0 ? options.transcript : defaultConvo.transcript,
+      toolExecutions: defaultConvo.toolExecutions,
+      outcome: options.outcome || defaultConvo.outcome,
+      notes: options.notes || defaultConvo.notes,
     });
 
     return CallLog.findById(call._id).populate('customerId', 'firstName lastName phone email') as any;

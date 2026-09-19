@@ -99,6 +99,48 @@ const callLogSchema = new Schema<ICallLog>(
       type: String,
       trim: true,
     },
+    outcome: {
+      type: String,
+      enum: [
+        'appointment_booked',
+        'lead_captured',
+        'inquiry_answered',
+        'emergency_transferred',
+        'missed_call',
+        'hangup_or_spam',
+      ],
+      index: true,
+    },
+    sentiment: {
+      type: String,
+      enum: ['positive', 'neutral', 'negative', 'frustrated'],
+      default: 'neutral',
+    },
+    summary: {
+      type: String,
+      trim: true,
+      maxlength: 2000,
+    },
+    aiHandled: {
+      type: Boolean,
+      default: false,
+    },
+    transcript: [
+      {
+        role: { type: String, enum: ['assistant', 'user', 'system'], required: true },
+        text: { type: String, required: true },
+        timestamp: { type: Date, default: Date.now },
+      },
+    ],
+    toolExecutions: [
+      {
+        toolName: { type: String, required: true },
+        arguments: { type: Schema.Types.Mixed },
+        result: { type: Schema.Types.Mixed },
+        durationMs: { type: Number, default: 0 },
+        timestamp: { type: Date, default: Date.now },
+      },
+    ],
   },
   {
     timestamps: true,

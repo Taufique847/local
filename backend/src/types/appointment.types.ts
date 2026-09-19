@@ -1,10 +1,34 @@
 import { Document, Types } from 'mongoose';
 
-export type AppointmentStatus = 'scheduled' | 'confirmed' | 'in_progress' | 'completed' | 'cancelled' | 'no_show';
+export type AppointmentStatus =
+  | 'scheduled'
+  | 'confirmed'
+  | 'rescheduled'
+  | 'in_progress'
+  | 'completed'
+  | 'cancelled'
+  | 'no_show';
 
 export type AppointmentPriority = 'low' | 'medium' | 'high' | 'urgent';
 
 export type AppointmentSource = 'manual' | 'ai_call' | 'website' | 'referral' | 'other';
+
+export interface TimeSlot {
+  time?: string;
+  startAt: string;
+  endAt: string;
+  available: boolean;
+}
+
+export interface IRescheduleRecord {
+  previousStartAt: Date;
+  previousEndAt: Date;
+  newStartAt: Date;
+  newEndAt: Date;
+  reason?: string;
+  changedAt: Date;
+  changedBy: string;
+}
 
 export interface IAppointment extends Document {
   _id: Types.ObjectId;
@@ -20,9 +44,12 @@ export interface IAppointment extends Document {
   status: AppointmentStatus;
   priority: AppointmentPriority;
   source: AppointmentSource;
+  address?: string;
+  technicianName?: string;
   customerNotes?: string;
   internalNotes?: string;
   cancellationReason?: string;
+  rescheduleHistory: IRescheduleRecord[];
   createdBy: string;
   createdAt: Date;
   updatedAt: Date;
@@ -32,8 +59,11 @@ export interface CreateAppointmentInput {
   customerId: string;
   leadId?: string;
   serviceId: string;
-  startAt: string; // ISO string from frontend
+  startAt: string; // ISO string
+  endAt?: string;
   description?: string;
+  address?: string;
+  technicianName?: string;
   priority?: AppointmentPriority;
   source?: AppointmentSource;
   customerNotes?: string;
@@ -43,10 +73,21 @@ export interface CreateAppointmentInput {
 export interface UpdateAppointmentInput {
   serviceId?: string;
   startAt?: string;
+  endAt?: string;
   description?: string;
+  address?: string;
+  technicianName?: string;
   priority?: AppointmentPriority;
+  status?: AppointmentStatus;
   customerNotes?: string;
   internalNotes?: string;
+}
+
+export interface RescheduleAppointmentInput {
+  startAt: string; // ISO string
+  endAt?: string;
+  reason?: string;
+  changedBy?: string;
 }
 
 export interface AppointmentQueryFilter {
@@ -58,11 +99,5 @@ export interface AppointmentQueryFilter {
   from?: string;    // YYYY-MM-DD range start
   to?: string;      // YYYY-MM-DD range end
   customerId?: string;
-  serviceId?: string;
-}
-
-export interface TimeSlot {
-  startAt: string; // ISO string
-  endAt: string;   // ISO string
-  available: boolean;
+  technicianName?: string;
 }

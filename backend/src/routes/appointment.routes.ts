@@ -9,8 +9,11 @@ router.use(authMiddleware as any);
 
 router.get('/', AppointmentController.getAppointments as any);
 router.get('/today', AppointmentController.getTodayAppointments as any);
+router.get('/calendar', AppointmentController.getCalendar as any);
 router.get('/:id', AppointmentController.getAppointmentById as any);
 router.post('/', AppointmentController.createAppointment as any);
+router.post('/:id/reschedule', AppointmentController.rescheduleAppointment as any);
+router.post('/:id/cancel', AppointmentController.cancelAppointment as any);
 router.put('/:id', AppointmentController.updateAppointment as any);
 router.patch('/:id/status', AppointmentController.updateStatus as any);
 router.delete('/:id', AppointmentController.deleteAppointment as any);

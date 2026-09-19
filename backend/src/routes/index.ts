@@ -11,6 +11,13 @@ import { availabilityRoutes } from './availability.routes';
 import { phoneNumberRoutes } from './phone-number.routes';
 import { callRoutes } from './call.routes';
 import { webhookRoutes } from './webhook.routes';
+import { communicationRoutes } from './communication.routes';
+import { knowledgeRoutes } from './knowledge-base.routes';
+import policyRoutes from './policy.routes';
+import leadRecoveryRoutes from './lead-recovery.routes';
+import dispatchRoutes from './dispatch.routes';
+import reviewRoutes from './review.routes';
+import billingRoutes from './billing.routes';
 
 const apiRouter = Router();
 
@@ -26,6 +33,13 @@ apiRouter.use('/appointments', appointmentRoutes);
 apiRouter.use('/availability', availabilityRoutes);
 apiRouter.use('/phone-numbers', phoneNumberRoutes);
 apiRouter.use('/calls', callRoutes);
+apiRouter.use('/messages', communicationRoutes);
+apiRouter.use('/knowledge', knowledgeRoutes);
+apiRouter.use('/policies', policyRoutes);
+apiRouter.use('/recovery', leadRecoveryRoutes);
+apiRouter.use('/dispatch', dispatchRoutes);
+apiRouter.use('/reviews', reviewRoutes);
+apiRouter.use('/billing', billingRoutes);
 apiRouter.use('/webhooks/twilio', webhookRoutes);
 
 export default apiRouter;

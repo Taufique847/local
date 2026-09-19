@@ -132,4 +132,80 @@ export class AppointmentController {
       next(error);
     }
   }
+
+  public static async rescheduleAppointment(
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      if (!req.user) throw new AppError('Authentication required', 401);
+      const businessId = await AppointmentController.getBusinessId(req.user.id);
+      const { startAt, endAt, reason } = req.body;
+
+      if (!startAt) {
+        throw new AppError('New start time (startAt) is required to reschedule', 400);
+      }
+
+      const appointment = await AppointmentService.rescheduleAppointment(businessId, req.params.id, {
+        startAt,
+        endAt,
+        reason,
+        changedBy: req.user.email || 'user',
+      });
+
+      sendSuccess(res, { success: true, message: 'Appointment rescheduled successfully', appointment }, 200);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  public static async cancelAppointment(
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      if (!req.user) throw new AppError('Authentication required', 401);
+      const businessId = await AppointmentController.getBusinessId(req.user.id);
+      const { reason } = req.body;
+
+      const appointment = await AppointmentService.cancelAppointment(
+        businessId,
+        req.params.id,
+        reason,
+        req.user.email || 'user'
+      );
+
+      sendSuccess(res, { success: true, message: 'Appointment cancelled successfully', appointment }, 200);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  public static async getCalendar(
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      if (!req.user) throw new AppError('Authentication required', 401);
+      const businessId = await AppointmentController.getBusinessId(req.user.id);
+      const { from, to } = req.query;
+
+      if (!from || !to) {
+        throw new AppError('from and to query parameters are required (YYYY-MM-DD)', 400);
+      }
+
+      const appointments = await AppointmentService.getCalendarAppointments(
+        businessId,
+        String(from),
+        String(to)
+      );
+
+      sendSuccess(res, { success: true, appointments }, 200);
+    } catch (error) {
+      next(error);
+    }
+  }
 }

@@ -175,4 +175,60 @@ export class LeadController {
       next(error);
     }
   }
+
+  // POST /api/leads/:id/qualify
+  public static async qualifyLead(
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      if (!req.user) throw new AppError('Authentication required', 401);
+      const businessId = await LeadController.getBusinessId(req.user.id);
+      const { serviceType, urgency, estimatedValue, notes } = req.body;
+
+      if (!serviceType || !urgency) {
+        throw new AppError('serviceType and urgency are required to qualify lead', 400);
+      }
+
+      const lead = await LeadService.qualifyLead(businessId, req.params.id, {
+        serviceType,
+        urgency,
+        estimatedValue,
+        notes,
+      });
+
+      sendSuccess(res, { success: true, message: 'Lead qualified successfully', lead }, 200);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  // POST /api/leads/:id/activities
+  public static async addActivity(
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      if (!req.user) throw new AppError('Authentication required', 401);
+      const businessId = await LeadController.getBusinessId(req.user.id);
+      const { type, description, metadata } = req.body;
+
+      if (!type || !description) {
+        throw new AppError('type and description are required for an activity', 400);
+      }
+
+      const lead = await LeadService.addActivity(businessId, req.params.id, {
+        type,
+        description,
+        createdBy: req.user.email || 'user',
+        metadata,
+      });
+
+      sendSuccess(res, { success: true, message: 'Activity added successfully', lead }, 200);
+    } catch (error) {
+      next(error);
+    }
+  }
 }

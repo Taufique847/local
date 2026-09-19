@@ -17,6 +17,9 @@ export interface ICustomer extends Document {
   phone: string;
   email?: string;
   address?: ICustomerAddress;
+  serviceAddresses: ICustomerAddress[];
+  tags: string[];
+  lifetimeValue: number;
   notes?: string;
   status: CustomerStatus;
   source: string;
@@ -33,6 +36,9 @@ export interface CustomerDTO {
   phone: string;
   email?: string;
   address?: ICustomerAddress;
+  serviceAddresses?: ICustomerAddress[];
+  tags?: string[];
+  lifetimeValue?: number;
   notes?: string;
   status: CustomerStatus;
   source: string;
@@ -46,6 +52,9 @@ export interface CustomerInput {
   phone: string;
   email?: string;
   address?: ICustomerAddress;
+  serviceAddresses?: ICustomerAddress[];
+  tags?: string[];
+  lifetimeValue?: number;
   notes?: string;
   status?: CustomerStatus;
   source?: string;
@@ -56,6 +65,7 @@ export interface CustomerQueryInput {
   limit?: number;
   search?: string;
   status?: string;
+  tag?: string;
 }
 
 export interface PaginatedCustomers {

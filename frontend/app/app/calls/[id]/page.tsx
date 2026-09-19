@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useState, useEffect, use } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { useParams } from 'next/navigation';
 import { DashboardShell } from '@/components/dashboard/dashboard-shell';
 import { TelephonyService } from '@/services/telephony.service';
 import { CallLog, CallStatus } from '@/types/telephony';
@@ -34,13 +35,9 @@ const STATUS_BADGES: Record<CallStatus, string> = {
   cancelled: 'bg-neutral-800 text-neutral-400 border-neutral-700',
 };
 
-export default function CallDetailPage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
-  const resolvedParams = use(params);
-  const callId = resolvedParams.id;
+export default function CallDetailPage() {
+  const params = useParams();
+  const callId = (params?.id as string) || '';
 
   const [call, setCall] = useState<CallLog | null>(null);
   const [loading, setLoading] = useState(true);

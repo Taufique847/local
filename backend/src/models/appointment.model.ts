@@ -1,6 +1,19 @@
 import { Schema, model } from 'mongoose';
 import { IAppointment } from '../types/appointment.types';
 
+const rescheduleRecordSchema = new Schema(
+  {
+    previousStartAt: { type: Date, required: true },
+    previousEndAt: { type: Date, required: true },
+    newStartAt: { type: Date, required: true },
+    newEndAt: { type: Date, required: true },
+    reason: { type: String, trim: true },
+    changedAt: { type: Date, default: Date.now },
+    changedBy: { type: String, default: 'system' },
+  },
+  { _id: false }
+);
+
 const appointmentSchema = new Schema<IAppointment>(
   {
     businessId: {
@@ -13,11 +26,13 @@ const appointmentSchema = new Schema<IAppointment>(
       type: Schema.Types.ObjectId,
       ref: 'Customer',
       required: [true, 'Customer is required'],
+      index: true,
     },
     leadId: {
       type: Schema.Types.ObjectId,
       ref: 'Lead',
       default: null,
+      index: true,
     },
     serviceId: {
       type: Schema.Types.ObjectId,
@@ -37,10 +52,12 @@ const appointmentSchema = new Schema<IAppointment>(
     startAt: {
       type: Date,
       required: [true, 'Start time is required'],
+      index: true,
     },
     endAt: {
       type: Date,
       required: [true, 'End time is required'],
+      index: true,
     },
     timezone: {
       type: String,
@@ -49,7 +66,7 @@ const appointmentSchema = new Schema<IAppointment>(
     },
     status: {
       type: String,
-      enum: ['scheduled', 'confirmed', 'in_progress', 'completed', 'cancelled', 'no_show'],
+      enum: ['scheduled', 'confirmed', 'rescheduled', 'in_progress', 'completed', 'cancelled', 'no_show'],
       default: 'scheduled',
       index: true,
     },
@@ -62,6 +79,14 @@ const appointmentSchema = new Schema<IAppointment>(
       type: String,
       enum: ['manual', 'ai_call', 'website', 'referral', 'other'],
       default: 'manual',
+    },
+    address: {
+      type: String,
+      trim: true,
+    },
+    technicianName: {
+      type: String,
+      trim: true,
     },
     customerNotes: {
       type: String,
@@ -78,6 +103,10 @@ const appointmentSchema = new Schema<IAppointment>(
       trim: true,
       maxlength: 500,
     },
+    rescheduleHistory: {
+      type: [rescheduleRecordSchema],
+      default: [],
+    },
     createdBy: {
       type: String,
       default: 'owner',
@@ -88,11 +117,10 @@ const appointmentSchema = new Schema<IAppointment>(
   }
 );
 
-// Compound indexes for efficient queries
-appointmentSchema.index({ businessId: 1, startAt: 1 });
+// Compound indexes for conflict checking & scheduling queries
+appointmentSchema.index({ businessId: 1, startAt: 1, endAt: 1 });
 appointmentSchema.index({ businessId: 1, status: 1 });
 appointmentSchema.index({ businessId: 1, customerId: 1 });
 appointmentSchema.index({ businessId: 1, serviceId: 1 });
-appointmentSchema.index({ businessId: 1, startAt: 1, endAt: 1 });
 
 export const Appointment = model<IAppointment>('Appointment', appointmentSchema);

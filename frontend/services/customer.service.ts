@@ -107,4 +107,49 @@ export class CustomerService {
       throw new Error(json.message || 'Failed to delete customer');
     }
   }
+
+  // M16/M24: Unified Customer 360 View
+  public static async getCustomer360(id: string): Promise<any> {
+    const res = await fetch(`${API_BASE_URL}/api/customers/${id}/360`, {
+      method: 'GET',
+      headers: { 'Accept': 'application/json' },
+      credentials: 'include',
+      cache: 'no-store',
+    });
+
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.message || 'Failed to fetch customer 360 profile');
+    return json;
+  }
+
+  // Update Customer Tags (VIP, Commercial, etc.)
+  public static async updateTags(id: string, tags: string[]): Promise<string[]> {
+    const res = await fetch(`${API_BASE_URL}/api/customers/${id}/tags`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      credentials: 'include',
+      body: JSON.stringify({ tags }),
+    });
+
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.message || 'Failed to update tags');
+    return json.tags || [];
+  }
+
+  // M19: Get Customer Long-term Memories
+  public static async getCustomerMemories(id: string): Promise<any[]> {
+    const res = await fetch(`${API_BASE_URL}/api/customers/${id}/memories`, {
+      method: 'GET',
+      headers: { 'Accept': 'application/json' },
+      credentials: 'include',
+      cache: 'no-store',
+    });
+
+    const json = await res.json();
+    if (!res.ok) return [];
+    return json.memories || [];
+  }
 }

@@ -47,6 +47,24 @@ const customerSchema = new Schema<ICustomer>(
       trim: true,
       maxlength: [2000, 'Notes cannot exceed 2000 characters'],
     },
+    tags: {
+      type: [String],
+      default: [],
+      index: true,
+    },
+    lifetimeValue: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    serviceAddresses: [
+      {
+        street: { type: String, trim: true },
+        city: { type: String, trim: true },
+        state: { type: String, trim: true },
+        zip: { type: String, trim: true },
+      },
+    ],
     status: {
       type: String,
       enum: ['active', 'inactive'],

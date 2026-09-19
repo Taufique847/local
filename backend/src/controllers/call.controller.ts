@@ -1,5 +1,6 @@
 import { Response, NextFunction } from 'express';
 import { CallService } from '../services/call.service';
+import { CallAnalyticsService } from '../services/call-analytics.service';
 import { BusinessService } from '../services/business.service';
 import { AuthenticatedRequest } from '../types/auth.types';
 import { sendSuccess } from '../utils/response';
@@ -71,7 +72,7 @@ export class CallController {
     try {
       if (!req.user) throw new AppError('Authentication required', 401);
       const businessId = await CallController.getBusinessId(req.user.id);
-      const { callerPhone, durationSeconds } = req.body;
+      const { callerPhone, durationSeconds, transcript, outcome, notes } = req.body;
 
       if (!callerPhone) {
         throw new AppError('callerPhone is required for simulated call', 400);
@@ -80,9 +81,43 @@ export class CallController {
       const call = await CallService.simulateInboundCall(
         businessId,
         callerPhone,
-        durationSeconds || 45
+        durationSeconds || 45,
+        { transcript, outcome, notes }
       );
       sendSuccess(res, { success: true, call }, 201);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  // GET /api/calls/:id/transcript
+  public static async getTranscript(
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      if (!req.user) throw new AppError('Authentication required', 401);
+      const businessId = await CallController.getBusinessId(req.user.id);
+      const data = await CallAnalyticsService.getCallTranscript(businessId, req.params.id);
+      sendSuccess(res, { success: true, ...data }, 200);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  // GET /api/calls/analytics/summary
+  public static async getAnalytics(
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      if (!req.user) throw new AppError('Authentication required', 401);
+      const businessId = await CallController.getBusinessId(req.user.id);
+      const days = req.query.days ? Number(req.query.days) : 30;
+      const analytics = await CallAnalyticsService.getAnalyticsSummary(businessId, days);
+      sendSuccess(res, { success: true, analytics }, 200);
     } catch (error) {
       next(error);
     }

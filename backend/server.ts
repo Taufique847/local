@@ -1,6 +1,7 @@
 import { app } from './src/app';
 import { config } from './src/config/env';
 import { connectDB, disconnectDB } from './src/config/database';
+import { VoiceStreamHandler } from './src/services/voice/voice-stream.handler';
 
 let server: any;
 
@@ -15,8 +16,12 @@ const startServer = async () => {
       console.log(`📡 Port: ${config.port}`);
       console.log(`🌍 Environment: ${config.nodeEnv}`);
       console.log(`🔗 Allowed Frontend Origin: ${config.frontendUrl}`);
+      console.log(`🎙️ Voice WebSocket: /api/voice/media-stream`);
       console.log(`=========================================`);
     });
+
+    // Attach Voice Media Stream WebSocket server
+    VoiceStreamHandler.initialize(server);
   } catch (error) {
     console.error('Failed to start server due to database connection error:', error);
     process.exit(1);

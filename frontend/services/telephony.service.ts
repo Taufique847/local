@@ -210,4 +210,68 @@ export class TelephonyService {
     if (!res.ok) throw new Error(json.message || 'Failed to simulate call');
     return json.call;
   }
+
+  // Get full call transcript and tool executions (M15)
+  public static async getCallTranscript(id: string): Promise<any> {
+    const res = await fetch(`${API_BASE_URL}/api/calls/${id}/transcript`, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      credentials: 'include',
+      cache: 'no-store',
+    });
+
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.message || 'Failed to fetch transcript');
+    return json;
+  }
+
+  // Get conversation intelligence analytics (M15)
+  public static async getAnalytics(days: number = 30): Promise<any> {
+    const res = await fetch(`${API_BASE_URL}/api/calls/analytics/summary?days=${days}`, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      credentials: 'include',
+      cache: 'no-store',
+    });
+
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.message || 'Failed to fetch call analytics');
+    return json.analytics;
+  }
+
+  // M20/M25: Get AI Conversation QA Quality Summary
+  public static async getQASummary(): Promise<any> {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/calls/qa/summary`, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        credentials: 'include',
+        cache: 'no-store',
+      });
+
+      const json = await res.json();
+      if (!res.ok) return { totalEvaluated: 0, averageResolutionScore: 100, complianceRate: 100, flaggedCount: 0, recentFlagged: [] };
+      return json.summary || json;
+    } catch {
+      return { totalEvaluated: 0, averageResolutionScore: 100, complianceRate: 100, flaggedCount: 0, recentFlagged: [] };
+    }
+  }
+
+  // M20/M25: List QA Reviews & Flagged Calls with Coaching Notes
+  public static async getQAReviews(flaggedOnly: boolean = false): Promise<any> {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/calls/qa?flaggedOnly=${flaggedOnly}&limit=20`, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        credentials: 'include',
+        cache: 'no-store',
+      });
+
+      const json = await res.json();
+      if (!res.ok) return { items: [], total: 0 };
+      return json;
+    } catch {
+      return { items: [], total: 0 };
+    }
+  }
 }

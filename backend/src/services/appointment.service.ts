@@ -8,6 +8,7 @@ import { AvailabilityService } from './availability.service';
 import {
   CreateAppointmentInput,
   UpdateAppointmentInput,
+  RescheduleAppointmentInput,
   AppointmentQueryFilter,
   AppointmentStatus,
   IAppointment,
@@ -16,7 +17,7 @@ import { AppError } from '../types';
 
 export class AppointmentService {
   /**
-   * Create a new appointment with double-booking check.
+   * Create a new appointment with double-booking check and lead synchronization.
    */
   static async createAppointment(
     businessId: Types.ObjectId | string,
@@ -51,7 +52,9 @@ export class AppointmentService {
     }
 
     const durationMinutes = service.durationMinutes || 60;
-    const endAt = new Date(startAt.getTime() + durationMinutes * 60 * 1000);
+    const endAt = input.endAt
+      ? new Date(input.endAt)
+      : new Date(startAt.getTime() + durationMinutes * 60 * 1000);
 
     // Double-booking conflict check
     const hasConflict = await AvailabilityService.checkSlotConflict(businessId, startAt, endAt);
@@ -61,6 +64,7 @@ export class AppointmentService {
 
     const title = `${service.name} - ${customer.firstName} ${customer.lastName}`.trim();
     const timezone = business.timezone || 'America/New_York';
+    const address = input.address || customer.address;
 
     const appointment = await Appointment.create({
       businessId,
@@ -75,17 +79,177 @@ export class AppointmentService {
       status: 'scheduled',
       priority: input.priority || 'medium',
       source: input.source || 'manual',
+      address,
+      technicianName: input.technicianName,
       customerNotes: input.customerNotes,
       internalNotes: input.internalNotes,
       createdBy,
     });
 
+    // If linked to lead, update lead status to appointment_booked
+    if (input.leadId) {
+      await Lead.findOneAndUpdate(
+        { _id: input.leadId, businessId },
+        {
+          $set: {
+            appointmentId: appointment._id,
+            status: 'appointment_booked',
+          },
+          $push: {
+            activities: {
+              type: 'appointment_scheduled',
+              description: `Appointment scheduled for ${startAt.toLocaleString()}`,
+              createdAt: new Date(),
+              createdBy,
+              metadata: { appointmentId: appointment._id },
+            },
+          },
+        }
+      );
+    }
+
     const populated = await Appointment.findById(appointment._id)
-      .populate('customerId', 'firstName lastName phone email')
+      .populate('customerId', 'firstName lastName phone email address')
       .populate('serviceId', 'name durationMinutes startingPrice category')
-      .populate('leadId', 'name phone email status');
+      .populate('leadId', 'title status urgency');
 
     return populated!;
+  }
+
+  /**
+   * Reschedule an existing appointment with conflict checking and history tracking (M13).
+   */
+  static async rescheduleAppointment(
+    businessId: Types.ObjectId | string,
+    id: string,
+    input: RescheduleAppointmentInput
+  ): Promise<IAppointment> {
+    const appointment = await Appointment.findOne({ _id: id, businessId });
+    if (!appointment) {
+      throw new AppError('Appointment not found', 404);
+    }
+
+    if (['completed', 'cancelled'].includes(appointment.status)) {
+      throw new AppError(`Cannot reschedule an appointment that is already ${appointment.status}`, 400);
+    }
+
+    const newStartAt = new Date(input.startAt);
+    if (isNaN(newStartAt.getTime())) {
+      throw new AppError('Invalid new start date format', 400);
+    }
+
+    const durationMs = appointment.endAt.getTime() - appointment.startAt.getTime();
+    const newEndAt = input.endAt ? new Date(input.endAt) : new Date(newStartAt.getTime() + durationMs);
+
+    // Check conflict excluding this appointment
+    const hasConflict = await AvailabilityService.checkSlotConflict(
+      businessId,
+      newStartAt,
+      newEndAt,
+      appointment._id
+    );
+
+    if (hasConflict) {
+      throw new AppError('The requested reschedule time slot is already booked.', 409);
+    }
+
+    // Record reschedule history
+    appointment.rescheduleHistory.push({
+      previousStartAt: appointment.startAt,
+      previousEndAt: appointment.endAt,
+      newStartAt,
+      newEndAt,
+      reason: input.reason,
+      changedAt: new Date(),
+      changedBy: input.changedBy || 'system',
+    });
+
+    appointment.startAt = newStartAt;
+    appointment.endAt = newEndAt;
+    appointment.status = 'rescheduled';
+
+    await appointment.save();
+
+    // Notify linked lead if present
+    if (appointment.leadId) {
+      await Lead.findOneAndUpdate(
+        { _id: appointment.leadId, businessId },
+        {
+          $push: {
+            activities: {
+              type: 'note',
+              description: `Appointment rescheduled to ${newStartAt.toLocaleString()}${input.reason ? ` (${input.reason})` : ''}`,
+              createdAt: new Date(),
+              createdBy: input.changedBy || 'scheduling_engine',
+            },
+          },
+        }
+      );
+    }
+
+    return this.getAppointmentById(businessId, id);
+  }
+
+  /**
+   * Cancel an appointment with mandatory or optional reason (M13).
+   */
+  static async cancelAppointment(
+    businessId: Types.ObjectId | string,
+    id: string,
+    reason?: string,
+    cancelledBy: string = 'user'
+  ): Promise<IAppointment> {
+    const appointment = await Appointment.findOne({ _id: id, businessId });
+    if (!appointment) {
+      throw new AppError('Appointment not found', 404);
+    }
+
+    if (appointment.status === 'completed') {
+      throw new AppError('Cannot cancel an already completed appointment', 400);
+    }
+
+    appointment.status = 'cancelled';
+    appointment.cancellationReason = reason || 'Cancelled by customer/business request';
+    await appointment.save();
+
+    if (appointment.leadId) {
+      await Lead.findOneAndUpdate(
+        { _id: appointment.leadId, businessId },
+        {
+          $push: {
+            activities: {
+              type: 'note',
+              description: `Appointment cancelled: ${appointment.cancellationReason}`,
+              createdAt: new Date(),
+              createdBy: cancelledBy,
+            },
+          },
+        }
+      );
+    }
+
+    return this.getAppointmentById(businessId, id);
+  }
+
+  /**
+   * Get calendar range appointments (for week or month views)
+   */
+  static async getCalendarAppointments(
+    businessId: Types.ObjectId | string,
+    from: string,
+    to: string
+  ): Promise<IAppointment[]> {
+    const fromDate = new Date(from);
+    const toDate = new Date(to);
+
+    return Appointment.find({
+      businessId,
+      status: { $ne: 'cancelled' },
+      startAt: { $gte: fromDate, $lte: toDate },
+    })
+      .sort({ startAt: 1 })
+      .populate('customerId', 'firstName lastName phone email address')
+      .populate('serviceId', 'name durationMinutes startingPrice category');
   }
 
   /**
@@ -102,7 +266,7 @@ export class AppointmentService {
   }> {
     const query: any = { businessId };
 
-    if (filter.status) {
+    if (filter.status && filter.status !== 'all') {
       query.status = filter.status;
     }
 
@@ -110,8 +274,8 @@ export class AppointmentService {
       query.customerId = filter.customerId;
     }
 
-    if (filter.serviceId) {
-      query.serviceId = filter.serviceId;
+    if (filter.technicianName) {
+      query.technicianName = new RegExp(filter.technicianName, 'i');
     }
 
     // Specific day filter: YYYY-MM-DD
@@ -124,12 +288,8 @@ export class AppointmentService {
       }
     } else if (filter.from || filter.to) {
       query.startAt = {};
-      if (filter.from) {
-        query.startAt.$gte = new Date(filter.from);
-      }
-      if (filter.to) {
-        query.startAt.$lte = new Date(filter.to);
-      }
+      if (filter.from) query.startAt.$gte = new Date(filter.from);
+      if (filter.to) query.startAt.$lte = new Date(filter.to);
     }
 
     // Text search in title or customer
@@ -149,6 +309,7 @@ export class AppointmentService {
 
       query.$or = [
         { title: searchRegex },
+        { address: searchRegex },
         { customerNotes: searchRegex },
         { internalNotes: searchRegex },
         { customerId: { $in: customerIds } },
@@ -164,9 +325,9 @@ export class AppointmentService {
         .sort({ startAt: 1 })
         .skip(skip)
         .limit(limit)
-        .populate('customerId', 'firstName lastName phone email')
+        .populate('customerId', 'firstName lastName phone email address')
         .populate('serviceId', 'name durationMinutes startingPrice category')
-        .populate('leadId', 'name phone email status'),
+        .populate('leadId', 'title status urgency'),
       Appointment.countDocuments(query),
     ]);
 
@@ -188,7 +349,7 @@ export class AppointmentService {
     const appointment = await Appointment.findOne({ _id: id, businessId })
       .populate('customerId', 'firstName lastName phone email address')
       .populate('serviceId', 'name durationMinutes startingPrice category description')
-      .populate('leadId', 'name phone email status');
+      .populate('leadId', 'title status urgency');
 
     if (!appointment) {
       throw new AppError('Appointment not found', 404);
@@ -198,7 +359,7 @@ export class AppointmentService {
   }
 
   /**
-   * Update appointment details with reschedule conflict check.
+   * Update appointment details.
    */
   static async updateAppointment(
     businessId: Types.ObjectId | string,
@@ -210,67 +371,20 @@ export class AppointmentService {
       throw new AppError('Appointment not found', 404);
     }
 
-    let serviceId = appointment.serviceId;
-    if (input.serviceId && input.serviceId !== appointment.serviceId.toString()) {
-      const service = await Service.findOne({ _id: input.serviceId, businessId });
-      if (!service) {
-        throw new AppError('Service not found', 404);
-      }
-      serviceId = service._id;
-    }
-
-    let startAt = appointment.startAt;
-    let endAt = appointment.endAt;
-
-    if (input.startAt || input.serviceId) {
-      const service = await Service.findById(serviceId);
-      const durationMinutes = service?.durationMinutes || 60;
-
-      if (input.startAt) {
-        startAt = new Date(input.startAt);
-        if (isNaN(startAt.getTime())) {
-          throw new AppError('Invalid start date/time format', 400);
-        }
-      }
-
-      endAt = new Date(startAt.getTime() + durationMinutes * 60 * 1000);
-
-      // Check conflict excluding this appointment
-      const hasConflict = await AvailabilityService.checkSlotConflict(
-        businessId,
-        startAt,
-        endAt,
-        appointment._id
-      );
-
-      if (hasConflict) {
-        throw new AppError('This time slot is already booked. Please choose another time.', 409);
-      }
-
-      appointment.startAt = startAt;
-      appointment.endAt = endAt;
-      appointment.serviceId = serviceId;
-
-      if (service) {
-        const customer = await Customer.findById(appointment.customerId);
-        if (customer) {
-          appointment.title = `${service.name} - ${customer.firstName} ${customer.lastName}`.trim();
-        }
-      }
-    }
-
     if (input.description !== undefined) appointment.description = input.description;
     if (input.priority !== undefined) appointment.priority = input.priority;
+    if (input.status !== undefined) appointment.status = input.status;
+    if (input.address !== undefined) appointment.address = input.address;
+    if (input.technicianName !== undefined) appointment.technicianName = input.technicianName;
     if (input.customerNotes !== undefined) appointment.customerNotes = input.customerNotes;
     if (input.internalNotes !== undefined) appointment.internalNotes = input.internalNotes;
 
     await appointment.save();
-
     return this.getAppointmentById(businessId, id);
   }
 
   /**
-   * Update appointment status (scheduled, confirmed, in_progress, completed, cancelled, no_show).
+   * Update appointment status.
    */
   static async updateStatus(
     businessId: Types.ObjectId | string,
@@ -278,30 +392,44 @@ export class AppointmentService {
     status: AppointmentStatus,
     cancellationReason?: string
   ): Promise<IAppointment> {
+    if (status === 'cancelled') {
+      return this.cancelAppointment(businessId, id, cancellationReason);
+    }
+
     const appointment = await Appointment.findOne({ _id: id, businessId });
     if (!appointment) {
       throw new AppError('Appointment not found', 404);
     }
 
-    const validStatuses: AppointmentStatus[] = [
-      'scheduled',
-      'confirmed',
-      'in_progress',
-      'completed',
-      'cancelled',
-      'no_show',
-    ];
-
-    if (!validStatuses.includes(status)) {
-      throw new AppError(`Invalid status: ${status}`, 400);
+    if (!appointment.serviceId) {
+      const Service = (await import('../models/service.model')).Service;
+      const defaultService = await Service.findOne({ businessId, status: 'active' });
+      if (defaultService) {
+        appointment.serviceId = defaultService._id as any;
+      }
+    }
+    if (!appointment.timezone) {
+      appointment.timezone = 'America/New_York';
     }
 
     appointment.status = status;
-    if (status === 'cancelled' && cancellationReason) {
+    if (cancellationReason) {
       appointment.cancellationReason = cancellationReason;
     }
-
     await appointment.save();
+
+    // Trigger Area 4 Automated Review & Reputation Shielding funnel on completion
+    if (status === 'completed') {
+      try {
+        const { ReviewReputationService } = await import('./review-reputation.service');
+        ReviewReputationService.triggerPostServiceSurvey(appointment._id, { bypassQuietHours: true }).catch((err) => {
+          console.warn('Error triggering automated CSAT review survey:', err.message);
+        });
+      } catch (err: any) {
+        console.warn('Error importing ReviewReputationService:', err.message);
+      }
+    }
+
     return this.getAppointmentById(businessId, id);
   }
 
@@ -320,7 +448,7 @@ export class AppointmentService {
   }
 
   /**
-   * Get today's appointments for dashboard / schedule overview.
+   * Get today's appointments.
    */
   static async getTodayAppointments(
     businessId: Types.ObjectId | string
@@ -335,7 +463,7 @@ export class AppointmentService {
       startAt: { $gte: startOfDay, $lte: endOfDay },
     })
       .sort({ startAt: 1 })
-      .populate('customerId', 'firstName lastName phone email')
+      .populate('customerId', 'firstName lastName phone email address')
       .populate('serviceId', 'name durationMinutes startingPrice category');
   }
 }

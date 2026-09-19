@@ -201,28 +201,28 @@ export function AppointmentModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm overflow-y-auto">
-      <div className="relative w-full max-w-2xl bg-neutral-900 border border-neutral-800 rounded-2xl shadow-2xl overflow-hidden my-8">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/40 backdrop-blur-xs overflow-y-auto">
+      <div className="relative w-full max-w-2xl bg-white border border-slate-200/90 rounded-2xl shadow-2xl overflow-hidden my-8 animate-in fade-in zoom-in-95 duration-150">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-neutral-800 bg-neutral-900/80">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-slate-50/80">
           <div className="flex items-center gap-3">
-            <div className="p-2 rounded-xl bg-blue-500/10 text-blue-400 border border-blue-500/20">
+            <div className="p-2 rounded-xl bg-blue-50 text-blue-600 border border-blue-100">
               <Calendar className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-lg font-semibold text-neutral-100">
-                {isEditing ? 'Edit Appointment' : 'Book New Appointment'}
+              <h2 className="text-base sm:text-lg font-bold text-slate-900">
+                {isEditing ? 'Edit Appointment' : 'Book New Field Appointment'}
               </h2>
-              <p className="text-xs text-neutral-400">
+              <p className="text-xs text-slate-500">
                 {isEditing
-                  ? 'Update schedule or notes for this booking'
-                  : 'Select customer, service, and pick an open time slot'}
+                  ? 'Update schedule or field notes for this booking'
+                  : 'Select customer, service, and pick an open dispatch slot'}
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-lg text-neutral-400 hover:text-neutral-100 hover:bg-neutral-800 transition-colors"
+            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
           >
             <X className="w-5 h-5" />
           </button>
@@ -230,33 +230,33 @@ export function AppointmentModal({
 
         {/* Error notification */}
         {error && (
-          <div className="mx-6 mt-4 p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 flex items-center gap-3 text-sm">
-            <AlertCircle className="w-5 h-5 shrink-0" />
-            <p className="leading-snug">{error}</p>
+          <div className="mx-6 mt-4 p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 flex items-center gap-3 text-sm">
+            <AlertCircle className="w-5 h-5 shrink-0 text-rose-600" />
+            <p className="leading-snug text-xs font-semibold">{error}</p>
           </div>
         )}
 
         {/* Form Body */}
-        <form onSubmit={handleSubmit} className="p-6 space-y-5">
+        <form onSubmit={handleSubmit} className="p-6 space-y-4">
           {loadingPrereqs ? (
-            <div className="py-12 flex flex-col items-center justify-center gap-3 text-neutral-400">
-              <Loader2 className="w-7 h-7 animate-spin text-blue-500" />
-              <p className="text-sm">Loading customers and services...</p>
+            <div className="py-12 flex flex-col items-center justify-center gap-3 text-slate-400">
+              <Loader2 className="w-7 h-7 animate-spin text-blue-600" />
+              <p className="text-xs font-semibold text-slate-500">Loading customers and services...</p>
             </div>
           ) : (
             <>
               {/* Customer & Service Select */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-medium text-neutral-300 mb-1.5 flex items-center gap-1.5">
-                    <User className="w-3.5 h-3.5 text-blue-400" />
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center gap-1.5">
+                    <User className="w-3.5 h-3.5 text-blue-600" />
                     Customer <span className="text-rose-500">*</span>
                   </label>
                   <select
                     value={customerId}
                     onChange={(e) => setCustomerId(e.target.value)}
                     disabled={isEditing}
-                    className="w-full bg-neutral-800/80 border border-neutral-700 rounded-xl px-3 py-2.5 text-sm text-neutral-100 focus:outline-none focus:border-blue-500 transition-colors"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs sm:text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-colors"
                   >
                     <option value="">Select customer...</option>
                     {customers.map((c) => {
@@ -271,14 +271,14 @@ export function AppointmentModal({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-medium text-neutral-300 mb-1.5 flex items-center gap-1.5">
-                    <Wrench className="w-3.5 h-3.5 text-blue-400" />
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center gap-1.5">
+                    <Wrench className="w-3.5 h-3.5 text-blue-600" />
                     Service <span className="text-rose-500">*</span>
                   </label>
                   <select
                     value={serviceId}
                     onChange={(e) => setServiceId(e.target.value)}
-                    className="w-full bg-neutral-800/80 border border-neutral-700 rounded-xl px-3 py-2.5 text-sm text-neutral-100 focus:outline-none focus:border-blue-500 transition-colors"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs sm:text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-colors"
                   >
                     <option value="">Select service...</option>
                     {services.map((s) => {
@@ -294,41 +294,40 @@ export function AppointmentModal({
               </div>
 
               {/* Date Picker & Time Slots */}
-              <div className="p-4 bg-neutral-800/40 rounded-xl border border-neutral-800 space-y-4">
+              <div className="p-4 bg-slate-50/80 rounded-xl border border-slate-200 space-y-3">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <label className="text-xs font-medium text-neutral-300 flex items-center gap-1.5">
-                    <Calendar className="w-3.5 h-3.5 text-blue-400" />
+                  <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                    <Calendar className="w-3.5 h-3.5 text-blue-600" />
                     Appointment Date <span className="text-rose-500">*</span>
                   </label>
                   <input
                     type="date"
                     value={date}
                     onChange={(e) => setDate(e.target.value)}
-                    className="bg-neutral-800 border border-neutral-700 rounded-lg px-3 py-1.5 text-sm text-neutral-100 focus:outline-none focus:border-blue-500"
+                    className="bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                   />
                 </div>
 
                 {/* Slots Grid */}
                 <div>
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-medium text-neutral-400 flex items-center gap-1.5">
-                      <Clock className="w-3.5 h-3.5 text-blue-400" />
+                    <span className="text-xs font-bold text-slate-600 flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5 text-blue-600" />
                       Available Time Slots
                     </span>
                     {loadingSlots && (
-                      <span className="text-xs text-blue-400 flex items-center gap-1">
+                      <span className="text-xs text-blue-600 font-semibold flex items-center gap-1">
                         <Loader2 className="w-3 h-3 animate-spin" /> Checking availability...
                       </span>
                     )}
                   </div>
 
                   {slots.length === 0 && !loadingSlots ? (
-                    <p className="text-xs text-neutral-500 py-3 text-center">
-                      No availability found for this date. Business may be closed or all slots
-                      booked.
+                    <p className="text-xs text-slate-500 py-3 text-center font-medium bg-white rounded-lg border border-slate-200/70">
+                      No availability found for this date. Business may be closed or all slots booked.
                     </p>
                   ) : (
-                    <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 max-h-48 overflow-y-auto pr-1">
+                    <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 max-h-44 overflow-y-auto pr-1">
                       {slots.map((slot) => {
                         const isSelected = selectedSlot === slot.startAt;
                         const isAvailable = slot.available || isSelected;
@@ -339,12 +338,12 @@ export function AppointmentModal({
                             key={slot.startAt}
                             disabled={!isAvailable}
                             onClick={() => setSelectedSlot(slot.startAt)}
-                            className={`px-2.5 py-2 rounded-lg text-xs font-medium transition-all text-center flex items-center justify-center gap-1 ${
+                            className={`px-2.5 py-2 rounded-xl text-xs font-bold transition-all text-center flex items-center justify-center gap-1 ${
                               isSelected
-                                ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/30 ring-2 ring-blue-400'
+                                ? 'bg-blue-600 text-white shadow-xs ring-2 ring-blue-400'
                                 : isAvailable
-                                ? 'bg-neutral-800 text-neutral-200 hover:bg-neutral-700 border border-neutral-700 hover:border-neutral-600'
-                                : 'bg-neutral-900/60 text-neutral-600 border border-neutral-800 cursor-not-allowed line-through'
+                                ? 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200 hover:border-slate-300'
+                                : 'bg-slate-100 text-slate-400 border border-slate-200/60 cursor-not-allowed line-through'
                             }`}
                           >
                             {isSelected && <CheckCircle2 className="w-3 h-3 text-white" />}
@@ -360,36 +359,36 @@ export function AppointmentModal({
               {/* Priority & Source */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-medium text-neutral-300 mb-1.5 flex items-center gap-1.5">
-                    <Tag className="w-3.5 h-3.5 text-blue-400" />
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center gap-1.5">
+                    <Tag className="w-3.5 h-3.5 text-blue-600" />
                     Priority
                   </label>
                   <select
                     value={priority}
                     onChange={(e) => setPriority(e.target.value as AppointmentPriority)}
-                    className="w-full bg-neutral-800/80 border border-neutral-700 rounded-xl px-3 py-2 text-sm text-neutral-100 focus:outline-none focus:border-blue-500"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs sm:text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                   >
-                    <option value="low">Low</option>
-                    <option value="medium">Medium</option>
-                    <option value="high">High</option>
-                    <option value="urgent">Urgent</option>
+                    <option value="low">Low Priority</option>
+                    <option value="medium">Medium Priority</option>
+                    <option value="high">High Priority</option>
+                    <option value="urgent">Urgent (Emergency)</option>
                   </select>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-medium text-neutral-300 mb-1.5">
-                    Source
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                    Dispatch Channel / Source
                   </label>
                   <select
                     value={source}
                     onChange={(e) => setSource(e.target.value as AppointmentSource)}
                     disabled={isEditing}
-                    className="w-full bg-neutral-800/80 border border-neutral-700 rounded-xl px-3 py-2 text-sm text-neutral-100 focus:outline-none focus:border-blue-500"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs sm:text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                   >
-                    <option value="manual">Manual Booking</option>
-                    <option value="website">Website</option>
-                    <option value="ai_call">AI Voice Agent</option>
-                    <option value="referral">Referral</option>
+                    <option value="manual">Manual Dispatch</option>
+                    <option value="website">Online Booking Form</option>
+                    <option value="ai_call">Alex AI Voice Receptionist</option>
+                    <option value="referral">Customer Referral</option>
                     <option value="other">Other</option>
                   </select>
                 </div>
@@ -398,28 +397,28 @@ export function AppointmentModal({
               {/* Notes */}
               <div className="space-y-3">
                 <div>
-                  <label className="block text-xs font-medium text-neutral-300 mb-1">
-                    Customer Notes / Instructions
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Customer Instructions / Notes
                   </label>
                   <textarea
                     rows={2}
                     value={customerNotes}
                     onChange={(e) => setCustomerNotes(e.target.value)}
-                    placeholder="Gate code, pets on property, special requests..."
-                    className="w-full bg-neutral-800/80 border border-neutral-700 rounded-xl px-3 py-2 text-sm text-neutral-100 placeholder-neutral-500 focus:outline-none focus:border-blue-500"
+                    placeholder="Gate code, HVAC unit location, customer requests..."
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs sm:text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-medium text-neutral-300 mb-1">
-                    Internal Staff Notes
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Internal Staff / Technician Notes
                   </label>
                   <textarea
                     rows={2}
                     value={internalNotes}
                     onChange={(e) => setInternalNotes(e.target.value)}
-                    placeholder="Technician assignment, pre-trip notes..."
-                    className="w-full bg-neutral-800/80 border border-neutral-700 rounded-xl px-3 py-2 text-sm text-neutral-100 placeholder-neutral-500 focus:outline-none focus:border-blue-500"
+                    placeholder="Assigned tech truck, replacement filters required, pre-dispatch notes..."
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs sm:text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                   />
                 </div>
               </div>
@@ -427,29 +426,29 @@ export function AppointmentModal({
           )}
 
           {/* Actions */}
-          <div className="flex items-center justify-end gap-3 pt-4 border-t border-neutral-800">
+          <div className="flex items-center justify-end gap-2.5 pt-4 border-t border-slate-100">
             <Button
               type="button"
               variant="outline"
               onClick={onClose}
-              className="bg-neutral-800 border-neutral-700 text-neutral-300 hover:bg-neutral-700 hover:text-neutral-100"
+              className="bg-white border-slate-200 text-slate-700 hover:bg-slate-50 font-semibold text-xs h-9 px-4 rounded-xl"
             >
               Cancel
             </Button>
             <Button
               type="submit"
               disabled={saving || loadingPrereqs || !selectedSlot}
-              className="bg-blue-600 hover:bg-blue-500 text-white font-medium px-5"
+              className="bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs h-9 px-5 rounded-xl shadow-xs"
             >
               {saving ? (
                 <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
                   Saving...
                 </>
               ) : isEditing ? (
-                'Update Appointment'
+                'Save Changes'
               ) : (
-                'Confirm Booking'
+                'Confirm & Dispatch'
               )}
             </Button>
           </div>

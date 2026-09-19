@@ -34,6 +34,30 @@ export interface IBusinessPhoneNumber extends Document {
   updatedAt: Date;
 }
 
+export type CallOutcome =
+  | 'appointment_booked'
+  | 'lead_captured'
+  | 'inquiry_answered'
+  | 'emergency_transferred'
+  | 'missed_call'
+  | 'hangup_or_spam';
+
+export type CallSentiment = 'positive' | 'neutral' | 'negative' | 'frustrated';
+
+export interface ITranscriptTurn {
+  role: 'assistant' | 'user' | 'system';
+  text: string;
+  timestamp: Date;
+}
+
+export interface IToolExecutionAudit {
+  toolName: string;
+  arguments: Record<string, any>;
+  result: Record<string, any>;
+  durationMs: number;
+  timestamp: Date;
+}
+
 export interface ICallLog extends Document {
   _id: Types.ObjectId;
   businessId: Types.ObjectId;
@@ -53,6 +77,12 @@ export interface ICallLog extends Document {
   appointmentId?: Types.ObjectId;
   notes?: string;
   recordingUrl?: string;
+  outcome?: CallOutcome;
+  sentiment?: CallSentiment;
+  summary?: string;
+  aiHandled?: boolean;
+  transcript?: ITranscriptTurn[];
+  toolExecutions?: IToolExecutionAudit[];
   createdAt: Date;
   updatedAt: Date;
 }
