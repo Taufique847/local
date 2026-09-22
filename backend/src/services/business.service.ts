@@ -33,9 +33,23 @@ export class BusinessService {
     };
   }
 
-  // Get current user's business
+  /**
+   * Looks up a business by the user who OWNS it.
+   *
+   * Only correct where ownership is genuinely the question — the onboarding
+   * mutations below, which are owner-only by design. To answer "which workspace
+   * is this person part of", use `BusinessContextService.resolve`, which also
+   * covers staff.
+   */
   public static async getBusinessByOwnerId(ownerId: string): Promise<BusinessDTO | null> {
     const business = await Business.findOne({ ownerId });
+    if (!business) return null;
+    return this.toDTO(business);
+  }
+
+  /** Reads a workspace the caller's membership has already been verified for. */
+  public static async getBusinessById(businessId: string): Promise<BusinessDTO | null> {
+    const business = await Business.findById(businessId);
     if (!business) return null;
     return this.toDTO(business);
   }
@@ -99,6 +113,13 @@ export class BusinessService {
     }
 
     await business.save();
+
+    // Record membership on the user as soon as the workspace exists. Without
+    // this the owner's businessId is only filled in lazily on a later request,
+    // and anything reading the user directly would see them as workspace-less.
+    const { BusinessContextService } = await import('./business-context.service');
+    await BusinessContextService.linkOwner(ownerId, business._id);
+
     return this.toDTO(business);
   }
 

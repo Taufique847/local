@@ -32,6 +32,32 @@ const userSchema = new Schema<IUser>(
       enum: ['user', 'admin'],
       default: 'user',
     },
+    /**
+     * Workspace membership.
+     *
+     * For an owner this duplicates `Business.ownerId` and is backfilled the
+     * first time they are seen after onboarding. For staff it is the ONLY link
+     * to a tenant, because `Business.ownerId` names exactly one person.
+     *
+     * Nullable by necessity: signup creates a User before any Business exists.
+     */
+    businessId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Business',
+      default: null,
+      index: true,
+    },
+    businessRole: {
+      type: String,
+      enum: ['owner', 'dispatcher', 'technician'],
+      default: null,
+    },
+    /** Set for technician users so the worker PWA can scope to one person. */
+    technicianId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Technician',
+      default: null,
+    },
     isActive: {
       type: Boolean,
       default: true,
@@ -64,6 +90,12 @@ const userSchema = new Schema<IUser>(
     timestamps: true,
   }
 );
+
+/**
+ * Team listings and the invite duplicate-check both query by workspace, and the
+ * workspace's owner is looked up by role.
+ */
+userSchema.index({ businessId: 1, businessRole: 1 });
 
 // Method to verify candidate password against hashed password
 userSchema.methods.comparePassword = async function (

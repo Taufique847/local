@@ -27,6 +27,7 @@ import {
   ShieldAlert,
   PhoneForwarded,
   ChevronRight,
+  Users,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -360,6 +361,26 @@ export default function SettingsPage() {
               </div>
               <ChevronRight
                 className="h-4 w-4 text-slate-300 transition-colors group-hover:text-amber-500"
+                aria-hidden="true"
+              />
+            </div>
+          </Link>
+
+          <Link href="/app/settings/team">
+            <div className="group flex cursor-pointer items-center gap-3 rounded-xl border border-slate-200/90 bg-white p-3.5 shadow-xs transition-all hover:border-violet-200 hover:shadow-sm">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-violet-200 bg-violet-50">
+                <Users className="h-5 w-5 text-violet-600" aria-hidden="true" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <span className="text-sm font-bold text-slate-900 transition-colors group-hover:text-violet-600">
+                  Team &amp; access
+                </span>
+                <p className="mt-0.5 text-[11px] text-slate-500">
+                  Give staff their own logins instead of sharing yours
+                </p>
+              </div>
+              <ChevronRight
+                className="h-4 w-4 text-slate-300 transition-colors group-hover:text-violet-500"
                 aria-hidden="true"
               />
             </div>

@@ -228,6 +228,73 @@ export class AuthController {
     }
   }
 
+  /**
+   * POST /api/auth/forgot-password
+   *
+   * Public. Always answers 200 with the same message, whether or not the address
+   * belongs to an account — see AuthService.requestPasswordReset for why.
+   */
+  public static async forgotPassword(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      const email = typeof req.body?.email === 'string' ? req.body.email : '';
+      await AuthService.requestPasswordReset(email, { ip: req.ip });
+
+      sendSuccess(
+        res,
+        {
+          success: true,
+          message:
+            'If an account exists for that address, a password reset link is on its way. Check your inbox.',
+        },
+        200
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * POST /api/auth/reset-password
+   *
+   * Public: opened from an email client with no session. The token is the
+   * credential.
+   *
+   * Cookies are cleared because the reset revokes every session, including any
+   * this browser was holding — leaving them set would have the client retrying
+   * with credentials the server has just invalidated.
+   */
+  public static async resetPassword(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      const token = typeof req.body?.token === 'string' ? req.body.token : '';
+      const password = typeof req.body?.password === 'string' ? req.body.password : '';
+
+      await AuthService.resetPassword(token, password);
+
+      clearAuthCookie(res);
+      clearRefreshCookie(res);
+
+      sendSuccess(
+        res,
+        {
+          success: true,
+          message:
+            'Your password has been changed and you have been signed out everywhere. Please log in again.',
+        },
+        200
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
   // GET /api/auth/me
   public static async getMe(
     req: AuthenticatedRequest,

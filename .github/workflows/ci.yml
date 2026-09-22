@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   backend:
-    name: Backend — typecheck & build
+    name: Backend — typecheck, test & build
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -35,6 +35,19 @@ jobs:
 
       - name: Type check
         run: npm run typecheck
+
+      - name: Type check tests
+        # Tests are excluded from the build tsconfig so they never reach dist/,
+        # which means `npm run typecheck` does not see them.
+        run: npm run typecheck:tests
+
+      - name: Test
+        # Covers the paths a QA pass found a critical cross-tenant hole in, plus
+        # the webhook signature checks that stand between a forged HTTP request
+        # and a free Enterprise subscription. mongodb-memory-server downloads a
+        # mongod binary on first run, hence the generous timeout.
+        run: npm test
+        timeout-minutes: 15
 
       - name: Build
         run: npm run build

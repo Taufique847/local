@@ -51,6 +51,28 @@ export class AuthService {
     await apiClient.post<{ success: boolean }>('/api/auth/verify-email/confirm', { token });
   }
 
+  /**
+   * Starts a password reset.
+   *
+   * The server answers identically whether or not the address is registered, so
+   * the UI must not claim the email was sent — only that it was if an account
+   * exists. Reporting otherwise would leak which addresses have accounts.
+   */
+  public static async forgotPassword(email: string): Promise<{ message?: string }> {
+    return apiClient.post<{ success: boolean; message?: string }>(
+      '/api/auth/forgot-password',
+      { email }
+    );
+  }
+
+  /** Completes a reset. Every session is revoked server-side, so a re-login follows. */
+  public static async resetPassword(token: string, password: string): Promise<void> {
+    await apiClient.post<{ success: boolean }>('/api/auth/reset-password', {
+      token,
+      password,
+    });
+  }
+
   public static async testProtectedEndpoint(): Promise<{ success: boolean; message: string }> {
     return apiClient.get<{ success: boolean; message: string }>('/api/auth/protected-test');
   }

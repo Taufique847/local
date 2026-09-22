@@ -3,7 +3,12 @@ import { AuthController } from '../controllers/auth.controller';
 import { authMiddleware } from '../middleware/auth.middleware';
 import { authLimiter, refreshLimiter } from '../middleware/rate-limit';
 import { validateBody } from '../middleware/validate';
-import { signupSchema, loginSchema } from '../validation/schemas';
+import {
+  signupSchema,
+  loginSchema,
+  forgotPasswordSchema,
+  resetPasswordSchema,
+} from '../validation/schemas';
 
 const router = Router();
 
@@ -29,6 +34,28 @@ router.post('/refresh', refreshLimiter, AuthController.refresh);
  * is a public endpoint that accepts a guessable-shaped secret.
  */
 router.post('/verify-email/confirm', authLimiter, AuthController.confirmEmailVerification);
+
+/**
+ * Password recovery. Both are public by necessity — a locked-out user has no
+ * session, which is the entire problem being solved.
+ *
+ * `authLimiter` keys on `${ip}|${email}`, which suits /forgot-password exactly:
+ * it throttles repeated requests for one address without letting one noisy IP
+ * lock out everyone. /reset-password carries only a token, so it degrades to
+ * per-IP throttling, which is what bounds guessing at the token.
+ */
+router.post(
+  '/forgot-password',
+  authLimiter,
+  validateBody(forgotPasswordSchema),
+  AuthController.forgotPassword
+);
+router.post(
+  '/reset-password',
+  authLimiter,
+  validateBody(resetPasswordSchema),
+  AuthController.resetPassword
+);
 
 // Protected routes
 router.get('/me', authMiddleware as any, AuthController.getMe as any);

@@ -1,6 +1,6 @@
 # BlueCollar AI — Final Feature Status
 
-> **Verified:** 22 September 2026, by reading `backend/src` and `frontend/app` directly and by running the built server against a live database. Plan documents were not trusted on their own.
+> **Verified:** 22 September 2026, by reading `backend/src` and `frontend/app` directly, by running the built server against a live database, and — as of the latest revision — by a 107-test automated suite.
 >
 > Reference vision: `targetFeaturesIdea.md` (86 numbered features, sections A–J).
 > This file supersedes the status sections of `PROJECT_STATUS_AND_ROADMAP.md`, which was written before the Week 1–4 hardening, Tier 1/Tier 2 work and QA bug fixes landed.
@@ -11,18 +11,20 @@
 
 | Measure | Value |
 |---|---|
-| Features **fully built and verified** | **26 of 86** (~30%) |
-| Features **partially built** (usable but incomplete) | **13 of 86** (~15%) |
-| Features **not started** | **47 of 86** (~55%) |
-| Weighted completion against the full vision | **~35%** |
-| Completion against a **launchable MVP** (§7 of the vision doc) | **~85%** |
+| Features **fully built and verified** | **32 of 86** (~37%) |
+| Features **partially built** (usable but incomplete) | **9 of 86** (~10%) |
+| Features **not started** | **45 of 86** (~52%) |
+| Weighted completion against the full vision | **~38%** |
+| Completion against a **launchable MVP** (§7 of the vision doc) | **~90%** |
 
 Two different questions, two different answers:
 
-- **"Is the 86-feature enterprise platform done?"** No — roughly a third.
-- **"Is there a product a contractor could pay for?"** Nearly. The MVP slice is almost complete; what blocks it is verification and two auth gaps, not missing features.
+- **"Is the 86-feature enterprise platform done?"** No — a bit over a third.
+- **"Is there a product a contractor could pay for?"** Nearly. What blocks it now is one thing: the voice pipeline has never handled a real call.
 
-The previous estimate in `PROJECT_STATUS_AND_ROADMAP.md` was 18–20%. The rise to ~35% is mostly hardening and correctness work rather than new surface area: the voice pipeline became real, the security holes closed, and a large amount of fabricated data was removed.
+> **Counting note.** An earlier revision of this file claimed 26 built / 13 partial. That headline never matched its own tables — counting the numbered rows below gives 32 and 9. The tables were right; the summary was wrong. Numbers here are now derived from the tables rather than written alongside them.
+
+The estimate in `PROJECT_STATUS_AND_ROADMAP.md` was 18–20%. The rise is mostly hardening and correctness rather than new surface area: the voice pipeline became real, the security holes closed, a large amount of fabricated data was removed, and the product gained the two things that stop it being single-user — staff accounts and a password recovery path.
 
 ---
 
@@ -112,7 +114,7 @@ Each row was confirmed in code, and where marked ✓runtime, exercised against a
 
 | # | Feature | Status | Notes |
 |---|---|---|---|
-| 59 | Role-based access control | 🟡 Partial | `requireRole` middleware exists and gates platform-operator endpoints. **No staff accounts** — see §4. |
+| 59 | Role-based access control | ✅ Built | Two independent role axes. `user.role` ('user' \| 'admin') gates platform-operator endpoints; `user.businessRole` ('owner' \| 'dispatcher' \| 'technician') gates tenant endpoints. Invite-by-email, team management screen, billing owner-only, technicians scoped to their own jobs. Role and membership are read from the database per request, so a demotion takes effect immediately rather than at token expiry. ✓tested |
 | 61 | Dashboard analytics | ✅ Built | Real KPIs, nullable when there is no data. All fabricated fallbacks removed. |
 | 66 | Integration health | ✅ Built | `/api/health/ready` reports database, telephony, billing, voice engine and scheduler state. ✓runtime |
 
@@ -124,6 +126,10 @@ Each row was confirmed in code, and where marked ✓runtime, exercised against a
 | Distributed lock (booking races, multi-replica cron) | ✅ Built ✓runtime |
 | Refresh tokens, rotation, reuse detection, revocation | ✅ Built ✓runtime |
 | Email verification flow | ✅ Built (send path unexercised) |
+| Password reset by email, single-use, revokes all sessions | ✅ Built ✓tested (send path unexercised) |
+| Staff invitations — email link, single use, tenant-bound | ✅ Built ✓tested (send path unexercised) |
+| Media-stream WebSocket authorization (single-use signed token) | ✅ Built ✓tested |
+| Automated test suite — 107 tests over tenancy, money and auth | ✅ Built, wired into CI |
 | Data retention sweep + per-customer data erasure | ✅ Built |
 | AI/recording disclosure spoken before the assistant answers | ✅ Built |
 | Docker, compose, CI (typecheck/build/secrets/image) | ✅ Built |
@@ -135,20 +141,24 @@ Each row was confirmed in code, and where marked ✓runtime, exercised against a
 
 ### Tier A — blocks launch. Nothing else matters until these are done.
 
-| # | Item | Why it blocks | Effort |
-|---|---|---|---|
-| A1 | **Run the voice pipeline on a real call** | The entire product rests on it and it has never handled one call. Needs Deepgram + OpenAI + Twilio keys and a public HTTPS tunnel. | Hours, once keys exist |
-| A2 | **Password reset flow** | There is no recovery path. A user who forgets their password is permanently locked out. `EmailService` already exists, so this is the send + token + page. | ~½ day |
-| A3 | **Commit the work** | 214 files are uncommitted against the initial commit. One bad `git checkout` loses everything. | Minutes |
-| A4 | **Rotate the leaked credential** | `backend/cookies.txt` is still in git history at commit `6465794`. | Minutes |
-| A5 | **Tests for the money and tenancy paths** | Stripe webhook signature, Twilio webhook signature, portal share-token auth, worker tenant scoping. The QA report found a critical cross-tenant hole precisely because nothing guarded these. | 2–3 days |
+| # | Item | Status | Why it blocks | Effort |
+|---|---|---|---|---|
+| A1 | **Run the voice pipeline on a real call** | ⬜ Open | The entire product rests on it and it has never handled one call. Needs Deepgram + an LLM key + Twilio keys and a public HTTPS tunnel. | Hours, once keys exist |
+| A2 | **Password reset flow** | ✅ Done | There was no recovery path at all — a forgotten password meant permanent lockout. | — |
+| A3 | **Commit the work** | ⬜ Open | Everything since the initial commit is uncommitted. One bad `git checkout` loses it. | Minutes |
+| A4 | **Rotate the leaked credential** | ⬜ Open | `backend/cookies.txt` is still in git history at commit `6465794`. Removing it from the index does not remove it from history. | Minutes |
+| A5 | **Tests for the money and tenancy paths** | ✅ Done | The QA pass found a critical cross-tenant hole precisely because nothing guarded these. 107 tests now cover worker tenant + per-technician scoping, portal share tokens, Stripe and Twilio webhook signatures, RBAC, password reset, invitations and the media-stream token. | — |
+
+**On A5 — what the tests are actually worth.** Passing tests prove nothing on their own, so each guard was deliberately broken and the suite re-run to confirm it fails. Seven mutations were tried (dropping `businessId` from the appointment filter, honouring a caller-supplied `technicianId` on writes, removing the billing owner gate, disabling Twilio signature checks, re-allowing an ObjectId as a portal share token, making password reset reveal whether an email is registered, and skipping the stream token's signature comparison). Six were caught immediately. The seventh was not, which exposed a real coverage gap — a technician naming a colleague via query parameter on a *mutation* — and a test was added for it. All seven are now caught.
+
+That exercise also caught something worth recording: the first draft of the portal tests used `/api/portal/estimates/:token`, but the route is `/api/portal/quotes/:token`. Every negative assertion passed, because a mistyped route returns 404 for everyone. A green suite is not evidence until you have seen it go red.
 
 ### Tier B — high value, moderate effort. Build after launch is safe.
 
 | # | Item | Why | Effort |
 |---|---|---|---|
 | B1 | **Real AI post-call summary and coaching** | Today's "AI Summary" is an if/else on outcome producing canned sentences. One extra structured OpenAI call on the existing transcript makes it real. Highest demo impact per hour spent. | 1 day |
-| B2 | **Staff accounts + real RBAC** | Right now a contractor's dispatcher and technicians must share the owner login, which also means they can see billing. Needs `User.businessId`, invites, a user-management screen. | 3–4 days |
+| ~~B2~~ | ~~**Staff accounts + real RBAC**~~ | ✅ **Done.** See feature 59. Dispatchers and technicians have their own logins, billing is owner-only, and a technician sees only their own jobs. | — |
 | B3 | **Auto follow-up on unsold estimates** | The drip infrastructure already exists; point it at estimates with no response after 7 days. | ½ day |
 | B4 | **Equipment and unit registry** | Brand, model, install year, filter size per customer property. Foundational — pre-job briefs and upsell suggestions both depend on it. | 1–2 days |
 | B5 | **Stripe Connect / per-business payouts** | Contractors cannot actually collect their own customers' money into their own account yet. | 3–5 days |
@@ -189,7 +199,7 @@ Worth knowing before a demo, because each one reads as finished in the UI.
 | **Call "recordings"** | No audio is ever stored. The playback control on the calls page is the browser reading the transcript aloud. Labels were corrected, but there is no recording to produce if a customer or lawyer asks. |
 | **Landing page voice demo** | A scripted transcript with a play button, labelled "Scripted example". It is honest now, but it is not the product. |
 | **Multi-location and integrations settings** | Honest "not available yet" placeholders. No location model, no calendar OAuth. |
-| **Technician logins** | Technicians are records, not users. The worker PWA runs on the owner's session. |
+| **Technician logins** | ~~Technicians are records, not users.~~ **Fixed.** Technicians can now hold their own accounts, linked to a dispatch record, and the field app scopes to their own jobs. One gap remains: `frontend/app/worker/page.tsx` still has no client-side auth guard, so an unauthenticated visitor gets a page that renders and then fails its API calls. The data is safe — every `/api/worker/*` route is behind authentication — but the page should redirect rather than break. |
 | **Voice at scale** | `VoiceStreamHandler` and `VoiceSessionService` hold sessions in in-process `Map`s, so voice works on exactly one instance. The cron scheduler is now multi-replica safe; voice is not. |
 
 ---
@@ -204,20 +214,33 @@ Worth knowing before a demo, because each one reads as finished in the UI.
 | Estimate expiry and conversion idempotency | Live, with a backdated expiry |
 | Validation and error statuses | Live malformed payloads |
 | Document numbering | Live sequential creates |
-| Stripe webhook signature | Live forged webhook, rejected |
+| Stripe webhook signature | Live forged webhook, rejected · **now also automated** |
 | Rate limiting | Live burst, 429 at the expected attempt |
+| Twilio webhook signature | Automated — unsigned, forged, wrong-token and altered-parameter requests all rejected |
+| Worker per-technician scoping | Automated — including a technician naming a colleague explicitly |
+| Portal share tokens | Automated — raw ObjectId, wrong document type and unknown token all refused |
+| Tenant-level RBAC | Automated — dispatcher and technician refused billing, team management and profile edits |
+| Password reset lifecycle | Automated — single use, expiry, email-change invalidation, session revocation, no enumeration |
+| Staff invitations | Automated — single use, revocation, expiry, cross-tenant technician link refused, privilege escalation via request body refused |
+| Media-stream token | Automated — tampered, re-signed, expired and replayed tokens all refused |
+| **Automated tests** | ✅ 107 tests, 8 files, in CI. Mutation-checked: all 7 deliberate regressions caught |
 | **Voice pipeline end to end** | ❌ Never — no provider keys |
-| **Email delivery** | ❌ Never — no `EMAIL_API_KEY` |
+| **Email delivery** | ❌ Never — no `EMAIL_API_KEY`. Reset and invite flows are tested with the sender stubbed, so the token lifecycle is proven and the Resend call is not |
 | **Live card payment** | ❌ Never — Stripe in simulation mode |
 | **Frontend in a browser** | ❌ Compile and build verified only; not clicked through |
-| **Automated tests** | ❌ None exist |
 
 ---
 
 ## 6. Honest summary
 
-The foundation is genuinely good now. The security holes that mattered are closed, the fabricated data that made the product look further along than it was has been removed, and the parts that exist mostly do what they claim.
+The foundation is genuinely good now. The security holes that mattered are closed, the fabricated data that made the product look further along than it was has been removed, the parts that exist mostly do what they claim, and for the first time there is a test suite that would notice if that stopped being true.
 
-The gap between ~35% of the vision and a shippable product is smaller than it looks, because the remaining 65% is largely enterprise scale-out that a first customer does not need. What actually stands between this and revenue is short: prove the voice pipeline on a real call, add password reset, cover the money paths with tests, and commit the work.
+The gap between ~38% of the vision and a shippable product is smaller than it looks, because the remaining 62% is largely enterprise scale-out that a first customer does not need.
 
-The honest risk is not missing features. It is that the single most important component — the AI answering a phone call — has never once done so.
+What still stands between this and revenue is now very short:
+
+1. Prove the voice pipeline on a real call.
+2. Commit the work.
+3. Rotate the credential in git history.
+
+The honest risk has not changed, and no amount of the work above has reduced it: the single most important component — the AI answering a phone call — has never once done so. Everything around it is in good shape, which makes it easy to mistake for progress on the thing that matters. It is not. The next meaningful milestone is one phone call.

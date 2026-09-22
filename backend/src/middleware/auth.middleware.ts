@@ -1,7 +1,7 @@
 import { Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { config } from '../config/env';
-import { AuthenticatedRequest, JwtPayload } from '../types/auth.types';
+import { AuthenticatedRequest, JwtPayload, UserDTO } from '../types/auth.types';
 import { AUTH_COOKIE_NAME } from '../utils/token';
 import { User } from '../models/user.model';
 
@@ -76,12 +76,21 @@ export const authMiddleware = async (
       return;
     }
 
-    // Attach user to request object
+    /**
+     * Workspace membership is attached from the freshly-loaded user document,
+     * not from the token. This costs nothing extra — the document was already
+     * fetched for the checks above — and it means demoting someone or removing
+     * them from a workspace takes effect on their next request rather than
+     * whenever their access token expires.
+     */
     req.user = {
       id: user._id.toString(),
       name: user.name,
       email: user.email,
       role: user.role,
+      businessId: user.businessId ? user.businessId.toString() : null,
+      businessRole: (user.businessRole as UserDTO['businessRole']) ?? null,
+      technicianId: user.technicianId ? user.technicianId.toString() : null,
       emailVerified: Boolean(user.emailVerifiedAt),
       createdAt: user.createdAt,
     };

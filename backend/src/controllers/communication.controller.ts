@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { CommunicationService } from '../services/communication.service';
-import { BusinessService } from '../services/business.service';
+import { BusinessContextService } from '../services/business-context.service';
 import { TwilioService } from '../services/twilio.service';
 import { AuthenticatedRequest } from '../types/auth.types';
 import { sendSuccess } from '../utils/response';
@@ -9,12 +9,16 @@ import { logger } from '../utils/logger';
 import { escapeXml } from '../utils/escape-xml';
 
 export class CommunicationController {
+  /**
+   * Resolves the caller's workspace by MEMBERSHIP, not by ownership.
+   *
+   * This used to be `getBusinessByOwnerId`, which answers "which business does
+   * this person own" — correct for owners and empty for everyone else. Staff
+   * accounts would have been told to complete a business profile they do not own.
+   */
   private static async getBusinessId(userId: string): Promise<string> {
-    const business = await BusinessService.getBusinessByOwnerId(userId);
-    if (!business) {
-      throw new AppError('Please complete your business profile setup first', 400);
-    }
-    return business.id;
+    const context = await BusinessContextService.resolve(userId);
+    return context.businessId;
   }
 
   // POST /api/messages/send
