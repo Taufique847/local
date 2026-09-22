@@ -55,12 +55,34 @@ export const authMiddleware = async (
       return;
     }
 
+    /**
+     * Revocation check.
+     *
+     * Access tokens are stateless, so without this a token stayed usable until
+     * it expired even after the user logged out, signed out of all devices, or
+     * a stolen refresh token forced a session reset. Any token carrying an older
+     * version than the account's current one is refused.
+     *
+     * Tokens minted before this field existed have no `tv` claim; those are
+     * rejected too, so the upgrade does not leave a window of unrevocable
+     * sessions open.
+     */
+    const currentVersion = user.tokenVersion ?? 0;
+    if (typeof decoded.tv !== 'number' || decoded.tv !== currentVersion) {
+      res.status(401).json({
+        success: false,
+        message: 'Your session is no longer valid. Please log in again.',
+      });
+      return;
+    }
+
     // Attach user to request object
     req.user = {
       id: user._id.toString(),
       name: user.name,
       email: user.email,
       role: user.role,
+      emailVerified: Boolean(user.emailVerifiedAt),
       createdAt: user.createdAt,
     };
 

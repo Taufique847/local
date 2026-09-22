@@ -9,8 +9,12 @@ import { CommunicationService } from './communication.service';
 import { AvailabilityService } from './availability.service';
 import { AppointmentService } from './appointment.service';
 import { KnowledgeBaseService } from './knowledge-base.service';
+import { logger } from '../utils/logger';
 
 export class LeadRecoveryService {
+  /** Give up on a drip step after this many failed send attempts. */
+  private static readonly MAX_DRIP_ATTEMPTS = 5;
+
   /**
    * Adjusts a follow-up timestamp so it never lands inside TCPA Quiet Hours (8:00 AM - 9:00 PM).
    * If it falls during quiet hours, automatically rolls forward to 8:05 AM the next morning.
@@ -42,6 +46,10 @@ export class LeadRecoveryService {
 
     if (!callLog) return null;
 
+    // Never chase an owner test call. The "caller" is the contractor, so a drip
+    // campaign would text them their own follow-up sequence.
+    if (callLog.isTest) return null;
+
     // If call was already booked or an emergency transferred, no recovery needed
     if (callLog.appointmentId || callLog.outcome === 'appointment_booked' || callLog.outcome === 'emergency_transferred') {
       return null;
@@ -50,14 +58,18 @@ export class LeadRecoveryService {
     const businessId = callLog.businessId;
     const callerPhone = callLog.from;
 
-    // Check if caller already has an active future appointment
-    const futureAppointment = await Appointment.findOne({
-      businessId,
-      status: { $in: ['scheduled', 'confirmed'] },
-      startAt: { $gte: new Date() },
-    });
-    if (futureAppointment && callLog.customerId && futureAppointment.customerId.toString() === callLog.customerId.toString()) {
-      return null;
+    // Skip recovery if THIS caller already has an upcoming appointment.
+    // The customerId filter belongs in the query: the previous version fetched
+    // any one future appointment for the business and only compared afterwards,
+    // so an unrelated customer's booking could suppress a real lead recovery.
+    if (callLog.customerId) {
+      const futureAppointment = await Appointment.findOne({
+        businessId,
+        customerId: callLog.customerId,
+        status: { $in: ['scheduled', 'confirmed'] },
+        startAt: { $gte: new Date() },
+      });
+      if (futureAppointment) return null;
     }
 
     // Check if an active recovery campaign is already underway for this number within the last 24h
@@ -166,6 +178,18 @@ export class LeadRecoveryService {
         const rawStep3Time = new Date(Date.now() + 22 * 60 * 60 * 1000);
         const safeStep3Time = LeadRecoveryService.calculateTcpaSafeFollowUp(rawStep3Time, timezone);
 
+        // Send BEFORE advancing the state machine.
+        //
+        // The previous order marked the recovery `drip_step_2_sent` and saved it,
+        // then sent the SMS and swallowed any error — so a failed or unconfigured
+        // send still left a record claiming the customer had been contacted, and
+        // the step was never retried.
+        const sent = await LeadRecoveryService.attemptDripSend(recovery, {
+          body: step2Message,
+          label: 'step_2',
+        });
+        if (!sent) continue;
+
         recovery.messages.push({
           direction: 'outbound',
           text: step2Message,
@@ -175,19 +199,19 @@ export class LeadRecoveryService {
         recovery.status = 'drip_step_2_sent';
         recovery.step2SentAt = new Date();
         recovery.nextFollowUpAt = safeStep3Time;
+        recovery.dripAttempts = 0;
+        recovery.lastDripError = undefined;
         await recovery.save();
-
-        await CommunicationService.sendMessage(recovery.businessId, {
-          to: recovery.callerPhone,
-          body: step2Message,
-          customerId: recovery.customerId?.toString(),
-          type: 'lead_followup',
-          bypassQuietHours: false,
-        }).catch((e: any) => console.error('Error sending Step 2 Drip SMS:', e));
         processedCount++;
       } else if (recovery.currentStep === 2) {
         // Step 3 Drip: Incentive offer (24 hours later)
         const step3Message = `Special offer from ${businessName}: Book your heating & AC diagnostic today and get $25 off repairs! Reply with your zip code to book.`;
+
+        const sent = await LeadRecoveryService.attemptDripSend(recovery, {
+          body: step3Message,
+          label: 'step_3',
+        });
+        if (!sent) continue;
 
         recovery.messages.push({
           direction: 'outbound',
@@ -198,15 +222,9 @@ export class LeadRecoveryService {
         recovery.status = 'drip_step_3_sent';
         recovery.step3SentAt = new Date();
         recovery.nextFollowUpAt = undefined;
+        recovery.dripAttempts = 0;
+        recovery.lastDripError = undefined;
         await recovery.save();
-
-        await CommunicationService.sendMessage(recovery.businessId, {
-          to: recovery.callerPhone,
-          body: step3Message,
-          customerId: recovery.customerId?.toString(),
-          type: 'lead_followup',
-          bypassQuietHours: false,
-        }).catch((e: any) => console.error('Error sending Step 3 Drip SMS:', e));
         processedCount++;
       }
     }
@@ -215,13 +233,69 @@ export class LeadRecoveryService {
   }
 
   /**
+   * Attempts one drip SMS.
+   *
+   * Returns true only when the message was actually handed to the carrier. On
+   * failure the recovery is requeued with backoff, and after
+   * MAX_DRIP_ATTEMPTS it is marked expired so a broken telephony configuration
+   * cannot requeue the same step forever.
+   */
+  private static async attemptDripSend(
+    recovery: ILeadRecovery,
+    params: { body: string; label: string }
+  ): Promise<boolean> {
+    try {
+      await CommunicationService.sendMessage(recovery.businessId, {
+        to: recovery.callerPhone,
+        body: params.body,
+        customerId: recovery.customerId?.toString(),
+        type: 'lead_followup',
+        bypassQuietHours: false,
+      });
+      return true;
+    } catch (err: any) {
+      recovery.dripAttempts = (recovery.dripAttempts || 0) + 1;
+      recovery.lastDripError = String(err?.message || 'SMS send failed').slice(0, 500);
+
+      if (recovery.dripAttempts >= LeadRecoveryService.MAX_DRIP_ATTEMPTS) {
+        recovery.status = 'expired';
+        recovery.nextFollowUpAt = undefined;
+        logger.error('lead_recovery_drip_abandoned', {
+          recoveryId: recovery._id.toString(),
+          step: params.label,
+          attempts: recovery.dripAttempts,
+          reason: recovery.lastDripError,
+        });
+      } else {
+        // Retry with linear backoff rather than hammering a broken provider.
+        recovery.nextFollowUpAt = new Date(Date.now() + recovery.dripAttempts * 30 * 60 * 1000);
+        logger.warn('lead_recovery_drip_send_failed', {
+          recoveryId: recovery._id.toString(),
+          step: params.label,
+          attempts: recovery.dripAttempts,
+          reason: recovery.lastDripError,
+        });
+      }
+
+      await recovery.save();
+      return false;
+    }
+  }
+
+  /**
    * Handles customer replies to SMS and automatically negotiates & books appointment
    */
   public static async handleInboundCustomerReply(
+    businessId: Types.ObjectId | string,
     from: string,
     messageText: string
   ): Promise<{ handled: boolean; replyMessage?: string; bookedAppointment?: any }> {
+    // Scoped by businessId: the same consumer phone number can legitimately be
+    // in recovery for two different contractors, and an unscoped lookup
+    // attributed the reply (and the resulting booking) to whichever campaign
+    // happened to be newest across the whole database.
     const activeRecovery = await LeadRecovery.findOne({
+      businessId: new Types.ObjectId(businessId.toString()),
       callerPhone: from,
       status: { $in: ['speed_to_lead_sent', 'drip_step_2_sent', 'drip_step_3_sent'] },
     }).sort({ createdAt: -1 });
@@ -245,8 +319,8 @@ export class LeadRecoveryService {
       return { handled: true };
     }
 
-    const businessId = activeRecovery.businessId;
-    const business = await Business.findById(businessId);
+    const recoveryBusinessId = activeRecovery.businessId;
+    const business = await Business.findById(recoveryBusinessId);
     const businessName = business?.name || 'Apex Air';
 
     // Find or create customer
@@ -254,7 +328,7 @@ export class LeadRecoveryService {
     if (activeRecovery.customerId) {
       customer = await Customer.findById(activeRecovery.customerId);
     } else {
-      customer = await Customer.findOne({ businessId, phone: from });
+      customer = await Customer.findOne({ businessId: recoveryBusinessId, phone: from });
     }
 
     // Check if customer wants to book (keywords: yes, tomorrow, morning, afternoon, book, schedule, monday, friday, etc.)
@@ -292,22 +366,59 @@ export class LeadRecoveryService {
         activeRecovery.customerId = customer._id;
       }
 
-      // Create the appointment
-      const appointment = await Appointment.create({
-        businessId,
-        customerId: customer._id,
-        leadId: activeRecovery.leadId || null,
-        serviceId: service._id,
-        title: `${service.name} - SMS Booking`,
-        startAt: targetDate,
-        endAt: new Date(targetDate.getTime() + (service.durationMinutes || 60) * 60 * 1000),
-        status: 'scheduled',
-        address: customer.address?.street
-          ? `${customer.address.street}, ${customer.address.city || ''} ${customer.address.state || ''}`
-          : 'Service address on file',
-        technicianName: 'Primary HVAC Dispatch',
-        customerNotes: `Booked via Autonomous Speed-to-Lead SMS Recovery. Customer text: "${messageText}"`,
-      });
+      // Booked through AppointmentService so the slot conflict check and the
+      // per-business booking lock apply.
+      //
+      // This previously called `Appointment.create` directly, skipping the
+      // conflict check entirely — an SMS reply could drop a job on top of an
+      // existing one, and the customer was told they were confirmed.
+      const addressLine = customer.address?.street
+        ? `${customer.address.street}, ${customer.address.city || ''} ${customer.address.state || ''}`.trim()
+        : undefined;
+
+      let appointment;
+      try {
+        appointment = await AppointmentService.createAppointment(
+          businessId,
+          {
+            customerId: customer._id.toString(),
+            leadId: activeRecovery.leadId?.toString(),
+            serviceId: service._id.toString(),
+            startAt: targetDate.toISOString(),
+            address: addressLine,
+            source: 'ai_call',
+            customerNotes: `Booked via Autonomous Speed-to-Lead SMS Recovery. Customer text: "${messageText}"`,
+          },
+          'sms_recovery'
+        );
+      } catch (err: any) {
+        // The slot went while the reply was in flight. Say so instead of
+        // confirming a booking that does not exist.
+        logger.warn('lead_recovery_booking_conflict', {
+          recoveryId: activeRecovery._id.toString(),
+          reason: err?.message,
+        });
+
+        const fallbackMsg = `Thanks for getting back to us! That time was just taken. Reply with another day or time that suits you and we'll lock it in.`;
+        activeRecovery.messages.push({
+          direction: 'outbound',
+          text: fallbackMsg,
+          sentAt: new Date(),
+        });
+        await activeRecovery.save();
+
+        await CommunicationService.sendMessage(businessId, {
+          to: from,
+          body: fallbackMsg,
+          customerId: customer._id.toString(),
+          type: 'lead_followup',
+          bypassQuietHours: true,
+        }).catch((e: any) =>
+          logger.error('lead_recovery_conflict_reply_failed', { reason: e?.message })
+        );
+
+        return { handled: true, replyMessage: fallbackMsg };
+      }
 
       activeRecovery.status = 'recovered_booked';
       activeRecovery.recoveredAppointmentId = appointment._id;

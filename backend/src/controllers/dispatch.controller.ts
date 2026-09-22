@@ -57,6 +57,25 @@ export class DispatchController {
     }
   }
 
+  // DELETE /api/dispatch/zones/:id
+  public static async deleteZone(
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      if (!req.user) throw new AppError('Authentication required', 401);
+      const businessId = await DispatchController.getBusinessId(req.user.id);
+
+      const removed = await TechnicianDispatchService.deactivateZone(businessId, req.params.id);
+      if (!removed) throw new AppError('Service zone not found', 404);
+
+      sendSuccess(res, { success: true, message: 'Service zone removed' }, 200);
+    } catch (error) {
+      next(error);
+    }
+  }
+
   // POST /api/dispatch/technicians
   public static async createTechnician(
     req: AuthenticatedRequest,

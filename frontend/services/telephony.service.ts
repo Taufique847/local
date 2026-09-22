@@ -6,57 +6,44 @@ import {
   PaginatedCallsResponse,
   AvailablePhoneNumber,
   TwilioConnectionStatus,
+  TestCallReadiness,
+  StartedTestCall,
 } from '../types/telephony';
+import { apiClient } from '../lib/api-client';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
+/** Fallback used where an unavailable stats endpoint should not blank the page. */
+const EMPTY_CALL_STATS: CallStats = { total: 0, inbound: 0, completed: 0, missed: 0 };
 
 export class TelephonyService {
-  // Get all phone numbers assigned to the business
   public static async getPhoneNumbers(): Promise<BusinessPhoneNumber[]> {
-    const res = await fetch(`${API_BASE_URL}/api/phone-numbers`, {
-      method: 'GET',
-      headers: { Accept: 'application/json' },
-      credentials: 'include',
-      cache: 'no-store',
-    });
-
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.message || 'Failed to fetch phone numbers');
+    const json = await apiClient.get<{ phoneNumbers?: BusinessPhoneNumber[] }>(
+      '/api/phone-numbers'
+    );
     return json.phoneNumbers || [];
   }
 
-  // Get primary phone number
+  /** Null when the business has not connected a line yet, which is a normal state. */
   public static async getPrimaryPhoneNumber(): Promise<BusinessPhoneNumber | null> {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/phone-numbers/primary`, {
-        method: 'GET',
-        headers: { Accept: 'application/json' },
-        credentials: 'include',
-        cache: 'no-store',
-      });
-
-      if (!res.ok) return null;
-      const json = await res.json();
+      const json = await apiClient.get<{ phoneNumber?: BusinessPhoneNumber }>(
+        '/api/phone-numbers/primary'
+      );
       return json.phoneNumber || null;
     } catch {
       return null;
     }
   }
 
-  // Check Twilio connection status
   public static async getConnectionStatus(): Promise<TwilioConnectionStatus> {
-    const res = await fetch(`${API_BASE_URL}/api/phone-numbers/status`, {
-      method: 'GET',
-      headers: { Accept: 'application/json' },
-      credentials: 'include',
-      cache: 'no-store',
-    });
-
-    const json = await res.json();
-    return json;
+    return apiClient.get<TwilioConnectionStatus>('/api/phone-numbers/status');
   }
 
-  // Search available numbers to buy/provision
+  /**
+   * Numbers available to buy.
+   *
+   * Errors now propagate: the backend refuses rather than inventing inventory
+   * when Twilio is unconfigured, and the UI needs to show that reason.
+   */
   public static async searchAvailableNumbers(
     country: string = 'US',
     areaCode?: string | number
@@ -64,212 +51,129 @@ export class TelephonyService {
     const params = new URLSearchParams({ country });
     if (areaCode) params.set('areaCode', areaCode.toString());
 
-    const res = await fetch(`${API_BASE_URL}/api/phone-numbers/available?${params.toString()}`, {
-      method: 'GET',
-      headers: { Accept: 'application/json' },
-      credentials: 'include',
-      cache: 'no-store',
-    });
-
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.message || 'Failed to search phone numbers');
+    const json = await apiClient.get<{ availableNumbers?: AvailablePhoneNumber[] }>(
+      `/api/phone-numbers/available?${params.toString()}`
+    );
     return json.availableNumbers || [];
   }
 
-  // Provision / Purchase phone number
   public static async provisionNumber(phoneNumber: string): Promise<BusinessPhoneNumber> {
-    const res = await fetch(`${API_BASE_URL}/api/phone-numbers/provision`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-      },
-      credentials: 'include',
-      body: JSON.stringify({ phoneNumber }),
-    });
-
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.message || 'Failed to provision number');
+    const json = await apiClient.post<{ phoneNumber: BusinessPhoneNumber }>(
+      '/api/phone-numbers/provision',
+      { phoneNumber }
+    );
     return json.phoneNumber;
   }
 
-  // Manually connect an existing phone number
+  /** Registers a line the business already owns elsewhere. */
   public static async assignNumber(input: {
     phoneNumber: string;
     phoneNumberSid?: string;
     friendlyName?: string;
     isPrimary?: boolean;
   }): Promise<BusinessPhoneNumber> {
-    const res = await fetch(`${API_BASE_URL}/api/phone-numbers`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-      },
-      credentials: 'include',
-      body: JSON.stringify(input),
-    });
-
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.message || 'Failed to connect phone number');
+    const json = await apiClient.post<{ phoneNumber: BusinessPhoneNumber }>(
+      '/api/phone-numbers',
+      input
+    );
     return json.phoneNumber;
   }
 
-  // Set primary phone number
   public static async setPrimaryNumber(id: string): Promise<BusinessPhoneNumber> {
-    const res = await fetch(`${API_BASE_URL}/api/phone-numbers/${id}/primary`, {
-      method: 'PATCH',
-      headers: { Accept: 'application/json' },
-      credentials: 'include',
-    });
-
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.message || 'Failed to set primary number');
+    const json = await apiClient.patch<{ phoneNumber: BusinessPhoneNumber }>(
+      `/api/phone-numbers/${id}/primary`
+    );
     return json.phoneNumber;
   }
 
-  // Delete phone number
   public static async deleteNumber(id: string): Promise<void> {
-    const res = await fetch(`${API_BASE_URL}/api/phone-numbers/${id}`, {
-      method: 'DELETE',
-      headers: { Accept: 'application/json' },
-      credentials: 'include',
-    });
-
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.message || 'Failed to delete phone number');
+    await apiClient.delete<{ success: boolean }>(`/api/phone-numbers/${id}`);
   }
 
-  // Get call logs with pagination & filters
   public static async getCalls(params?: CallQuery): Promise<PaginatedCallsResponse> {
     const searchParams = new URLSearchParams();
     if (params?.page) searchParams.set('page', params.page.toString());
     if (params?.limit) searchParams.set('limit', params.limit.toString());
     if (params?.search) searchParams.set('search', params.search);
-    if (params?.direction && params.direction !== 'all') searchParams.set('direction', params.direction);
+    if (params?.direction && params.direction !== 'all') {
+      searchParams.set('direction', params.direction);
+    }
     if (params?.status && params.status !== 'all') searchParams.set('status', params.status);
     if (params?.date) searchParams.set('date', params.date);
 
-    const res = await fetch(`${API_BASE_URL}/api/calls?${searchParams.toString()}`, {
-      method: 'GET',
-      headers: { Accept: 'application/json' },
-      credentials: 'include',
-      cache: 'no-store',
-    });
-
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.message || 'Failed to fetch calls');
-    return json;
+    return apiClient.get<PaginatedCallsResponse>(`/api/calls?${searchParams.toString()}`);
   }
 
-  // Get call statistics
   public static async getCallStats(): Promise<CallStats> {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/calls/stats`, {
-        method: 'GET',
-        headers: { Accept: 'application/json' },
-        credentials: 'include',
-        cache: 'no-store',
-      });
-
-      if (!res.ok) return { total: 0, inbound: 0, completed: 0, missed: 0 };
-      const json = await res.json();
-      return json.stats || { total: 0, inbound: 0, completed: 0, missed: 0 };
+      const json = await apiClient.get<{ stats?: CallStats }>('/api/calls/stats');
+      return json.stats || EMPTY_CALL_STATS;
     } catch {
-      return { total: 0, inbound: 0, completed: 0, missed: 0 };
+      return EMPTY_CALL_STATS;
     }
   }
 
-  // Get single call details
   public static async getCallById(id: string): Promise<CallLog> {
-    const res = await fetch(`${API_BASE_URL}/api/calls/${id}`, {
-      method: 'GET',
-      headers: { Accept: 'application/json' },
-      credentials: 'include',
-      cache: 'no-store',
-    });
-
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.message || 'Failed to fetch call record');
+    const json = await apiClient.get<{ call: CallLog }>(`/api/calls/${id}`);
     return json.call;
   }
 
-  // Simulate an inbound test call
-  public static async simulateCall(callerPhone: string, durationSeconds: number = 60): Promise<CallLog> {
-    const res = await fetch(`${API_BASE_URL}/api/calls/simulate`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-      },
-      credentials: 'include',
-      body: JSON.stringify({ callerPhone, durationSeconds }),
-    });
-
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.message || 'Failed to simulate call');
-    return json.call;
+  /**
+   * Whether a real test call can be placed, and what is missing if not.
+   *
+   * Replaces the old `simulateCall`, which posted a browser-invented transcript
+   * to `/api/calls/simulate` and had it stored as a genuine AI-handled call.
+   */
+  public static async getTestCallReadiness(): Promise<TestCallReadiness> {
+    const json = await apiClient.get<{ readiness: TestCallReadiness }>(
+      '/api/calls/test-call/readiness'
+    );
+    return json.readiness;
   }
 
-  // Get full call transcript and tool executions (M15)
+  /**
+   * Places a real call from the business AI line to the owner's registered
+   * number. The destination is chosen by the server, not the browser.
+   */
+  public static async startTestCall(): Promise<StartedTestCall> {
+    return apiClient.post<StartedTestCall>('/api/calls/test-call', {});
+  }
+
   public static async getCallTranscript(id: string): Promise<any> {
-    const res = await fetch(`${API_BASE_URL}/api/calls/${id}/transcript`, {
-      method: 'GET',
-      headers: { Accept: 'application/json' },
-      credentials: 'include',
-      cache: 'no-store',
-    });
-
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.message || 'Failed to fetch transcript');
-    return json;
+    return apiClient.get<any>(`/api/calls/${id}/transcript`);
   }
 
-  // Get conversation intelligence analytics (M15)
   public static async getAnalytics(days: number = 30): Promise<any> {
-    const res = await fetch(`${API_BASE_URL}/api/calls/analytics/summary?days=${days}`, {
-      method: 'GET',
-      headers: { Accept: 'application/json' },
-      credentials: 'include',
-      cache: 'no-store',
-    });
-
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.message || 'Failed to fetch call analytics');
+    const json = await apiClient.get<{ analytics: any }>(
+      `/api/calls/analytics/summary?days=${days}`
+    );
     return json.analytics;
   }
 
-  // M20/M25: Get AI Conversation QA Quality Summary
+  /**
+   * Conversation QA summary.
+   *
+   * Returns empty counters rather than throwing, because this feeds a secondary
+   * panel that should not take down the calls page.
+   */
   public static async getQASummary(): Promise<any> {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/calls/qa/summary`, {
-        method: 'GET',
-        headers: { Accept: 'application/json' },
-        credentials: 'include',
-        cache: 'no-store',
-      });
-
-      const json = await res.json();
-      if (!res.ok) return { totalEvaluated: 0, averageResolutionScore: 100, complianceRate: 100, flaggedCount: 0, recentFlagged: [] };
+      const json = await apiClient.get<any>('/api/calls/qa/summary');
       return json.summary || json;
     } catch {
-      return { totalEvaluated: 0, averageResolutionScore: 100, complianceRate: 100, flaggedCount: 0, recentFlagged: [] };
+      return {
+        totalEvaluated: 0,
+        averageResolutionScore: null,
+        complianceRate: null,
+        flaggedCount: 0,
+        recentFlagged: [],
+      };
     }
   }
 
-  // M20/M25: List QA Reviews & Flagged Calls with Coaching Notes
   public static async getQAReviews(flaggedOnly: boolean = false): Promise<any> {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/calls/qa?flaggedOnly=${flaggedOnly}&limit=20`, {
-        method: 'GET',
-        headers: { Accept: 'application/json' },
-        credentials: 'include',
-        cache: 'no-store',
-      });
-
-      const json = await res.json();
-      if (!res.ok) return { items: [], total: 0 };
-      return json;
+      return await apiClient.get<any>(`/api/calls/qa?flaggedOnly=${flaggedOnly}&limit=20`);
     } catch {
       return { items: [], total: 0 };
     }

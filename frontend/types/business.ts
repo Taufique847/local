@@ -2,7 +2,15 @@ export type BusinessType = 'HVAC' | 'Plumbing' | 'Electrical' | 'Roofing' | 'Pes
 
 export type OnboardingStatus = 'not_started' | 'in_progress' | 'completed';
 
-export type OnboardingStep = 'business' | 'services' | 'service_area' | 'hours' | 'review' | 'completed';
+/** Must stay in sync with backend/src/types/business.types.ts */
+export type OnboardingStep =
+  | 'business'
+  | 'services'
+  | 'service_area'
+  | 'hours'
+  | 'phone'
+  | 'review'
+  | 'completed';
 
 export interface ServiceItem {
   id: string;
@@ -52,6 +60,11 @@ export interface Business {
   serviceArea: ServiceArea;
   businessHours: DayHours[];
   emergencyService: EmergencyService;
+  /**
+   * Full Google "write a review" URL including the real Place ID. Only sent to
+   * customers who rate 4 or 5 stars; a slug-based URL is not a valid review link.
+   */
+  googleReviewUrl?: string;
   onboardingStatus: OnboardingStatus;
   onboardingStep: OnboardingStep;
   createdAt: string;

@@ -63,8 +63,8 @@ export class CallController {
     }
   }
 
-  // POST /api/calls/simulate (Testing test call trigger)
-  public static async simulateCall(
+  // GET /api/calls/test-call/readiness
+  public static async getTestCallReadiness(
     req: AuthenticatedRequest,
     res: Response,
     next: NextFunction
@@ -72,19 +72,33 @@ export class CallController {
     try {
       if (!req.user) throw new AppError('Authentication required', 401);
       const businessId = await CallController.getBusinessId(req.user.id);
-      const { callerPhone, durationSeconds, transcript, outcome, notes } = req.body;
+      const readiness = await CallService.getTestCallReadiness(businessId);
+      sendSuccess(res, { success: true, readiness }, 200);
+    } catch (error) {
+      next(error);
+    }
+  }
 
-      if (!callerPhone) {
-        throw new AppError('callerPhone is required for simulated call', 400);
-      }
-
-      const call = await CallService.simulateInboundCall(
-        businessId,
-        callerPhone,
-        durationSeconds || 45,
-        { transcript, outcome, notes }
-      );
-      sendSuccess(res, { success: true, call }, 201);
+  /**
+   * POST /api/calls/test-call
+   *
+   * Places a real call from the business AI line to the owner's registered
+   * number. The destination is resolved server side on purpose — it is not
+   * accepted from the request body — so this cannot be used as a general dialer.
+   *
+   * Replaces POST /api/calls/simulate, which wrote an invented conversation
+   * straight into the call history.
+   */
+  public static async startTestCall(
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      if (!req.user) throw new AppError('Authentication required', 401);
+      const businessId = await CallController.getBusinessId(req.user.id);
+      const result = await CallService.startTestCall(businessId);
+      sendSuccess(res, { success: true, ...result }, 202);
     } catch (error) {
       next(error);
     }

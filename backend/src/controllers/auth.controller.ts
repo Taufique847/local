@@ -1,8 +1,21 @@
 import { Request, Response, NextFunction } from 'express';
 import { AuthService } from '../services/auth.service';
 import { AuthenticatedRequest } from '../types/auth.types';
-import { setAuthCookie, clearAuthCookie } from '../utils/token';
+import {
+  setAuthCookie,
+  clearAuthCookie,
+  setRefreshCookie,
+  clearRefreshCookie,
+  REFRESH_COOKIE_NAME,
+} from '../utils/token';
 import { sendSuccess } from '../utils/response';
+import { AppError } from '../types';
+
+/** Request metadata recorded against each issued session, for audit. */
+const sessionContext = (req: Request) => ({
+  ip: req.ip,
+  userAgent: req.headers['user-agent'] as string | undefined,
+});
 
 export class AuthController {
   // POST /api/auth/signup
@@ -13,10 +26,13 @@ export class AuthController {
   ): Promise<void> {
     try {
       const { name, email, password } = req.body;
-      const { user, token } = await AuthService.signup({ name, email, password });
+      const { user, token, refreshToken } = await AuthService.signup(
+        { name, email, password },
+        sessionContext(req)
+      );
 
-      // Set secure HTTP-only auth cookie
       setAuthCookie(res, token);
+      setRefreshCookie(res, refreshToken);
 
       sendSuccess(
         res,
@@ -40,10 +56,13 @@ export class AuthController {
   ): Promise<void> {
     try {
       const { email, password } = req.body;
-      const { user, token } = await AuthService.login({ email, password });
+      const { user, token, refreshToken } = await AuthService.login(
+        { email, password },
+        sessionContext(req)
+      );
 
-      // Set secure HTTP-only auth cookie
       setAuthCookie(res, token);
+      setRefreshCookie(res, refreshToken);
 
       sendSuccess(
         res,
@@ -59,19 +78,148 @@ export class AuthController {
     }
   }
 
-  // POST /api/auth/logout
-  public static async logout(
-    _req: Request,
+  /**
+   * POST /api/auth/refresh
+   *
+   * Exchanges the refresh cookie for a new access token, rotating the refresh
+   * token in the process. Access tokens are short-lived, so the browser calls
+   * this transparently rather than forcing a re-login every few minutes.
+   *
+   * Cookies are cleared on failure so a client holding a dead token stops
+   * retrying with it.
+   */
+  public static async refresh(
+    req: Request,
     res: Response,
     next: NextFunction
   ): Promise<void> {
     try {
+      const presented = req.cookies?.[REFRESH_COOKIE_NAME];
+      const { user, token, refreshToken } = await AuthService.refreshSession(
+        presented,
+        sessionContext(req)
+      );
+
+      setAuthCookie(res, token);
+      setRefreshCookie(res, refreshToken);
+
+      sendSuccess(res, { success: true, user }, 200);
+    } catch (error) {
       clearAuthCookie(res);
+      clearRefreshCookie(res);
+      next(error);
+    }
+  }
+
+  /**
+   * POST /api/auth/logout
+   *
+   * Revokes the presented refresh token server side. Clearing the cookie alone
+   * used to leave the session valid for its full lifetime, so anyone who had
+   * copied the token could keep using it after the user "logged out".
+   */
+  public static async logout(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      await AuthService.revokeSession(req.cookies?.[REFRESH_COOKIE_NAME]);
+
+      clearAuthCookie(res);
+      clearRefreshCookie(res);
+
       sendSuccess(
         res,
         {
           success: true,
           message: 'Logged out successfully',
+        },
+        200
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * POST /api/auth/logout-all
+   *
+   * Drops every session for the account and invalidates outstanding access
+   * tokens. This is the control a user needs after losing a device.
+   */
+  public static async logoutAll(
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      if (req.user) await AuthService.revokeAllSessions(req.user.id);
+
+      clearAuthCookie(res);
+      clearRefreshCookie(res);
+
+      sendSuccess(
+        res,
+        {
+          success: true,
+          message: 'Signed out of all devices',
+        },
+        200
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * POST /api/auth/verify-email/request
+   *
+   * Re-sends the verification link to the signed-in user's address.
+   */
+  public static async requestEmailVerification(
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      if (!req.user) throw new AppError('Authentication required', 401);
+      await AuthService.sendVerificationEmail(req.user.id);
+
+      sendSuccess(
+        res,
+        {
+          success: true,
+          message: 'Verification email sent. Check your inbox.',
+        },
+        200
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * POST /api/auth/verify-email/confirm
+   *
+   * Public: the link is opened from an email client, which has no session. The
+   * token itself is the credential.
+   */
+  public static async confirmEmailVerification(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      const token = typeof req.body?.token === 'string' ? req.body.token : '';
+      const user = await AuthService.confirmEmail(token);
+
+      sendSuccess(
+        res,
+        {
+          success: true,
+          message: 'Email address confirmed.',
+          user,
         },
         200
       );

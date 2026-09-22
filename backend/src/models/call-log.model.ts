@@ -125,6 +125,15 @@ const callLogSchema = new Schema<ICallLog>(
       type: Boolean,
       default: false,
     },
+    /**
+     * Owner-initiated test call. Real telephony and a real AI session, but kept
+     * out of stats so trying the assistant does not skew the business's own
+     * answer rate, booking rate or call volume.
+     */
+    isTest: {
+      type: Boolean,
+      default: false,
+    },
     transcript: [
       {
         role: { type: String, enum: ['assistant', 'user', 'system'], required: true },
@@ -141,6 +150,25 @@ const callLogSchema = new Schema<ICallLog>(
         timestamp: { type: Date, default: Date.now },
       },
     ],
+    /**
+     * Measured per-call voice engine performance and provider usage.
+     *
+     * Latency and cost were previously invisible: the dashboard displayed a
+     * hardcoded "<280ms" and there was no record of token or audio spend.
+     */
+    metrics: {
+      avgTurnLatencyMs: { type: Number },
+      maxTurnLatencyMs: { type: Number },
+      turnCount: { type: Number, default: 0 },
+      sttAudioSeconds: { type: Number, default: 0 },
+      llmRequests: { type: Number, default: 0 },
+      llmPromptTokens: { type: Number, default: 0 },
+      llmCompletionTokens: { type: Number, default: 0 },
+      ttsCharacters: { type: Number, default: 0 },
+      providerErrors: { type: Number, default: 0 },
+      bargeInCount: { type: Number, default: 0 },
+      endedReason: { type: String },
+    },
   },
   {
     timestamps: true,
@@ -151,5 +179,7 @@ const callLogSchema = new Schema<ICallLog>(
 callLogSchema.index({ businessId: 1, startedAt: -1 });
 callLogSchema.index({ businessId: 1, status: 1 });
 callLogSchema.index({ businessId: 1, from: 1 });
+// Reporting reads always filter out test calls, so isTest leads the key.
+callLogSchema.index({ businessId: 1, isTest: 1, startedAt: -1 });
 
 export const CallLog = model<ICallLog>('CallLog', callLogSchema);

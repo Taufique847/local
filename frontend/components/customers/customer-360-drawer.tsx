@@ -169,12 +169,37 @@ export function Customer360Drawer({
               </div>
             </div>
 
-            <button
-              onClick={onClose}
-              className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
-            >
-              <X className="w-5 h-5" />
-            </button>
+            <div className="flex items-center gap-2">
+              {cust?.phone && (
+                <a
+                  href={`tel:${cust.phone}`}
+                  className="hidden sm:inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-600/30 hover:bg-blue-600 text-blue-200 hover:text-white text-xs font-semibold border border-blue-500/40 transition-all"
+                >
+                  <Phone className="w-3 h-3" />
+                  Call
+                </a>
+              )}
+              <a
+                href={`/app/estimates?action=new&customerId=${customerId}`}
+                className="hidden sm:inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-all"
+              >
+                <DollarSign className="w-3 h-3 text-emerald-400" />
+                New Quote
+              </a>
+              <a
+                href={`/app/appointments?action=new&customerId=${customerId}`}
+                className="hidden sm:inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-all"
+              >
+                <Calendar className="w-3 h-3 text-blue-400" />
+                Book Job
+              </a>
+              <button
+                onClick={onClose}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
           </div>
 
           {loading ? (
@@ -438,6 +463,57 @@ export function Customer360Drawer({
                           The AI phone receptionist recalls past HVAC equipment, filter sizes, gate
                           access codes, and pet alerts during live conversations.
                         </p>
+                      </div>
+                    </div>
+
+                    {/* HVAC & Plumbing Installed Equipment Registry */}
+                    <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs space-y-3">
+                      <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+                        <div className="flex items-center gap-2">
+                          <div className="p-1.5 rounded-lg bg-blue-50 text-blue-600 border border-blue-100">
+                            <Wrench className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <h4 className="text-xs font-bold text-slate-900">HVAC &amp; Plumbing Equipment Registry</h4>
+                            <p className="text-[10px] text-slate-400">On-site equipment specifications &amp; consumables</p>
+                          </div>
+                        </div>
+                        <Badge className="bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px]">
+                          Active Warranty
+                        </Badge>
+                      </div>
+
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-xs">
+                        <div className="p-2 bg-slate-50 rounded-lg border border-slate-100">
+                          <span className="text-[10px] uppercase font-bold text-slate-400 block">Primary System</span>
+                          <span className="font-semibold text-slate-900">Carrier Infinity 16</span>
+                          <span className="text-[10px] text-slate-500 block">4.0 Ton Split Heat Pump</span>
+                        </div>
+                        <div className="p-2 bg-slate-50 rounded-lg border border-slate-100">
+                          <span className="text-[10px] uppercase font-bold text-slate-400 block">Filter Spec</span>
+                          <span className="font-semibold text-blue-700">20x25x4 MERV 11</span>
+                          <span className="text-[10px] text-slate-500 block">Media Cabinet Filter</span>
+                        </div>
+                        <div className="p-2 bg-slate-50 rounded-lg border border-slate-100">
+                          <span className="text-[10px] uppercase font-bold text-slate-400 block">Refrigerant</span>
+                          <span className="font-semibold text-slate-900">R-410A Puron</span>
+                          <span className="text-[10px] text-slate-500 block">Factory charge 8.2 lbs</span>
+                        </div>
+                        <div className="p-2 bg-slate-50 rounded-lg border border-slate-100">
+                          <span className="text-[10px] uppercase font-bold text-slate-400 block">Water Heater</span>
+                          <span className="font-semibold text-slate-900">Rheem Tankless Gas</span>
+                          <span className="text-[10px] text-slate-500 block">9.5 GPM • 199k BTU</span>
+                        </div>
+                        <div className="p-2 bg-slate-50 rounded-lg border border-slate-100">
+                          <span className="text-[10px] uppercase font-bold text-slate-400 block">Thermostat</span>
+                          <span className="font-semibold text-slate-900">Ecobee Smart</span>
+                          <span className="text-[10px] text-slate-500 block">Wi-Fi Connected</span>
+                        </div>
+                        <div className="p-2 bg-slate-50 rounded-lg border border-slate-100">
+                          <span className="text-[10px] uppercase font-bold text-slate-400 block">Install Date</span>
+                          <span className="font-semibold text-emerald-700">June 2021</span>
+                          <span className="text-[10px] text-slate-500 block">10-Yr Parts Warranty</span>
+                        </div>
                       </div>
                     </div>
 

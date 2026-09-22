@@ -1,5 +1,6 @@
 import { Response, NextFunction } from 'express';
 import { CustomerService } from '../services/customer.service';
+import { DataRetentionService } from '../services/data-retention.service';
 import { BusinessService } from '../services/business.service';
 import { AuthenticatedRequest } from '../types/auth.types';
 import { sendSuccess } from '../utils/response';
@@ -25,6 +26,29 @@ export class CustomerController {
       if (!req.user) throw new AppError('Authentication required', 401);
       const businessId = await CustomerController.getBusinessId(req.user.id);
       const result = await CustomerService.getCustomers(businessId, req.query);
+      sendSuccess(res, { success: true, ...result }, 200);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * POST /api/customers/:id/erase
+   *
+   * Satisfies a data deletion request. Scrubs the customer's identifying fields
+   * and redacts the free text in their calls, messages, appointments, estimates
+   * and invoices, while leaving dates and amounts so the contractor's books stay
+   * intact. Irreversible.
+   */
+  public static async erasePersonalData(
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      if (!req.user) throw new AppError('Authentication required', 401);
+      const businessId = await CustomerController.getBusinessId(req.user.id);
+      const result = await DataRetentionService.erasePersonalData(businessId, req.params.id);
       sendSuccess(res, { success: true, ...result }, 200);
     } catch (error) {
       next(error);

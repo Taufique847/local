@@ -1,3 +1,22 @@
+> ## ⚠️ Status: design document, not a description of the build
+>
+> This was written as a **forward-looking plan**. Much of it has since shipped, some
+> of it has not, and a few of the technical claims below were never accurate.
+> **`README.md` is the source of truth for what exists today.**
+>
+> Reconciled status as of this revision:
+>
+> | Area in this doc | Actual status |
+> |---|---|
+> | 1. Missed call & lead recovery | **Shipped.** 3-step drip, TCPA quiet hours, STOP/START, conversational SMS booking. Driven by a real cron scheduler (`backend/src/jobs/scheduler.ts`) — previously nothing invoked the drip processor, so steps 2 and 3 never fired. UI at `/app/recovery`. |
+> | 2. Realtime voice engine | **Shipped, but not yet verified against live provider credentials.** Deepgram Nova-2 STT → OpenAI tool-calling → Deepgram Aura TTS over Twilio Media Streams, with μ-law barge-in. **Cartesia is NOT used** — the table below naming it is wrong. Latency figures below are targets, not measurements; real per-call latency is now recorded in `CallLog.metrics`. |
+> | 3. Smart dispatch & zones | **Partially shipped.** Service zones (CRUD in settings), technician skills, ZIP matching, dispatch SMS. Route optimisation and map view are not built. |
+> | 4. Review & reputation shielding | **Shipped.** Delayed CSAT survey, 4–5★ → Google, 1–3★ shielded + escalated, 24h SLA sweep with owner alert. UI at `/app/reviews`. The Google link must be configured per business — a link built from the business name is not valid. |
+> | 5. Frontend dashboards | **Mostly shipped.** Customer 360 drawer, knowledge base + guardrail editors, dispatch zones, reviews, messages, recovery. A dedicated conversation-QA hub page was not built; QA data surfaces inside `/app/calls`. |
+>
+> Also note: the phased plan at the bottom is historical. Do not treat its
+> estimates or ordering as current.
+
 # 🚀 Advanced Automations & Enterprise Scaling Roadmap (M21 - M25)
 ## BlueCollar AI — US HVAC Autonomous Employee Platform
 

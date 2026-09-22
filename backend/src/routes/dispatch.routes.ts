@@ -1,15 +1,27 @@
 import { Router } from 'express';
 import { DispatchController } from '../controllers/dispatch.controller';
 import { authMiddleware } from '../middleware/auth.middleware';
+import { validateBody } from '../middleware/validate';
+import { serviceZoneSchema, technicianSchema } from '../validation/schemas';
 
 const router = Router();
 
 router.use(authMiddleware as any);
 
-router.post('/zones', DispatchController.createZone as any);
+// Service zones
 router.get('/zones', DispatchController.getZones as any);
-router.post('/technicians', DispatchController.createTechnician as any);
+router.post('/zones', validateBody(serviceZoneSchema), DispatchController.createZone as any);
+router.delete('/zones/:id', DispatchController.deleteZone as any);
+
+// Technicians
 router.get('/technicians', DispatchController.getTechnicians as any);
+router.post(
+  '/technicians',
+  validateBody(technicianSchema),
+  DispatchController.createTechnician as any
+);
+
+// Routing
 router.post('/match-tech', DispatchController.matchTechnician as any);
 router.post('/appointments/:id', DispatchController.dispatchAppointment as any);
 

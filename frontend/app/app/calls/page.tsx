@@ -4,6 +4,9 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { DashboardShell } from '@/components/dashboard/dashboard-shell';
 import { TelephonyService } from '@/services/telephony.service';
+import { TestCallModal } from '@/components/voice/test-call-modal';
+import { useDialog } from '@/lib/use-dialog';
+import { toErrorMessage } from '@/lib/api-client';
 import { CallLog, CallStats, CallAnalyticsData, CallStatus } from '@/types/telephony';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -43,6 +46,7 @@ import {
   Loader2,
   Activity,
   CheckCheck,
+  UserPlus,
   FastForward,
 } from 'lucide-react';
 
@@ -74,6 +78,7 @@ export default function CallsPage() {
   const [search, setSearch] = useState('');
   const [directionFilter, setDirectionFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [intentFilter, setIntentFilter] = useState<'all' | 'emergency' | 'booking' | 'pricing' | 'routine'>('all');
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [total, setTotal] = useState(0);
@@ -92,6 +97,7 @@ export default function CallsPage() {
   const [selectedCallId, setSelectedCallId] = useState<string | null>(null);
   const [transcriptData, setTranscriptData] = useState<any | null>(null);
   const [loadingTranscript, setLoadingTranscript] = useState(false);
+  const [transcriptError, setTranscriptError] = useState<string | null>(null);
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
   const [audioCurrentTime, setAudioCurrentTime] = useState(0);
   const [audioSpeed, setAudioSpeed] = useState<1 | 1.25 | 1.5 | 2>(1);
@@ -99,11 +105,8 @@ export default function CallsPage() {
   const [copiedTranscript, setCopiedTranscript] = useState(false);
   const [audioMuted, setAudioMuted] = useState(false);
 
-  // Simulation modal
-  const [simModalOpen, setSimModalOpen] = useState(false);
-  const [simPhone, setSimPhone] = useState('+1 (214) 883-9120');
-  const [simDuration, setSimDuration] = useState('58');
-  const [simulating, setSimulating] = useState(false);
+  // Real test call (dials the owner through the live voice pipeline)
+  const [testCallOpen, setTestCallOpen] = useState(false);
 
   const audioIntervalRef = useRef<any>(null);
 
@@ -226,32 +229,33 @@ export default function CallsPage() {
     });
   };
 
+  const closeTranscript = useCallback(() => {
+    stopAudio();
+    setSelectedCallId(null);
+    setTranscriptError(null);
+  }, [stopAudio]);
+
+  // Escape to close, focus trapped inside, focus restored to the row on close.
+  const transcriptDialogRef = useDialog<HTMLDivElement>({
+    isOpen: Boolean(selectedCallId),
+    onClose: closeTranscript,
+  });
+
   const handleOpenTranscript = async (callId: string) => {
     stopAudio();
     setSelectedCallId(callId);
     setLoadingTranscript(true);
+    setTranscriptError(null);
     setAudioCurrentTime(0);
     try {
       const data = await TelephonyService.getCallTranscript(callId);
       setTranscriptData(data);
     } catch (err) {
-      console.error('Failed to fetch transcript:', err);
+      // Was console.error only, so a failed load left the dialog silently blank.
+      setTranscriptError(toErrorMessage(err, 'Could not load this transcript.'));
+      setTranscriptData(null);
     } finally {
       setLoadingTranscript(false);
-    }
-  };
-
-  const handleSimulate = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSimulating(true);
-    try {
-      await TelephonyService.simulateCall(simPhone, Number(simDuration) || 58);
-      setSimModalOpen(false);
-      fetchCalls();
-    } catch (err: any) {
-      alert(err.message || 'Failed to simulate call');
-    } finally {
-      setSimulating(false);
     }
   };
 
@@ -289,6 +293,25 @@ export default function CallsPage() {
     }
   };
 
+  const displayedCalls = calls.filter((c: any) => {
+    if (intentFilter === 'all') return true;
+    const summary = (c.aiSummary || c.summary || '').toLowerCase();
+    const outcome = (c.outcome || '').toLowerCase();
+    if (intentFilter === 'emergency') {
+      return outcome === 'emergency_transferred' || summary.includes('emergency') || summary.includes('leak') || summary.includes('urgent') || summary.includes('no ac');
+    }
+    if (intentFilter === 'booking') {
+      return outcome === 'appointment_booked' || summary.includes('appointment') || summary.includes('book') || summary.includes('schedule');
+    }
+    if (intentFilter === 'pricing') {
+      return summary.includes('price') || summary.includes('cost') || summary.includes('quote') || summary.includes('estimate');
+    }
+    if (intentFilter === 'routine') {
+      return outcome === 'inquiry_answered' || summary.includes('hours') || summary.includes('general');
+    }
+    return true;
+  });
+
   return (
     <DashboardShell>
       <div className="space-y-6">
@@ -321,11 +344,11 @@ export default function CallsPage() {
             </Link>
 
             <Button
-              onClick={() => setSimModalOpen(true)}
+              onClick={() => setTestCallOpen(true)}
               className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs h-9 shadow-sm"
             >
-              <Plus className="w-3.5 h-3.5 mr-1.5" />
-              Simulate Inbound Call
+              <PhoneCall className="w-3.5 h-3.5 mr-1.5" aria-hidden="true" />
+              Test call me
             </Button>
           </div>
         </div>
@@ -463,14 +486,15 @@ export default function CallsPage() {
 
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-xs border-collapse">
+                    <caption className="sr-only">Flagged calls for quality review</caption>
                     <thead>
                       <tr className="border-b border-slate-100 bg-slate-50 text-slate-500 text-[11px] font-bold uppercase tracking-wider">
-                        <th className="py-3 px-4">Caller</th>
-                        <th className="py-3 px-4">Trigger Reason</th>
-                        <th className="py-3 px-4">Quality Score</th>
-                        <th className="py-3 px-4">Policy Status</th>
-                        <th className="py-3 px-4">AI Summary</th>
-                        <th className="py-3 px-4 text-right">Actions</th>
+                        <th scope="col" className="py-3 px-4">Caller</th>
+                        <th scope="col" className="py-3 px-4">Trigger Reason</th>
+                        <th scope="col" className="py-3 px-4">Quality Score</th>
+                        <th scope="col" className="py-3 px-4">Policy Status</th>
+                        <th scope="col" className="py-3 px-4">AI Summary</th>
+                        <th scope="col" className="py-3 px-4 text-right">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 text-slate-700">
@@ -549,9 +573,17 @@ export default function CallsPage() {
             {/* Search & Filters Toolbar */}
             <div className="flex flex-col sm:flex-row items-center gap-3">
               <div className="relative flex-1 w-full">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                {/* A placeholder disappears once typing starts, so it cannot serve as the label. */}
+                <label htmlFor="call-search" className="sr-only">
+                  Search calls by phone, customer name, address or keyword
+                </label>
+                <Search
+                  className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400"
+                  aria-hidden="true"
+                />
                 <Input
-                  type="text"
+                  id="call-search"
+                  type="search"
                   placeholder="Search caller phone, customer name, address, or keywords..."
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
@@ -560,7 +592,11 @@ export default function CallsPage() {
               </div>
 
               <div className="flex items-center gap-2 w-full sm:w-auto">
+                <label htmlFor="call-direction-filter" className="sr-only">
+                  Filter calls by direction
+                </label>
                 <select
+                  id="call-direction-filter"
                   value={directionFilter}
                   onChange={(e) => setDirectionFilter(e.target.value)}
                   className="bg-white border border-slate-200 text-xs text-slate-700 rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500 shadow-2xs font-medium"
@@ -609,28 +645,57 @@ export default function CallsPage() {
               </div>
             </div>
 
+            {/* Urgency & Intent Filter Pills */}
+            <div className="flex items-center gap-2 overflow-x-auto pb-1">
+              {[
+                { id: 'all', label: 'All Inbound & Outbound' },
+                { id: 'emergency', label: '🚨 Emergency (No AC / Leaks)', count: calls.filter((c: any) => (c.outcome === 'emergency_transferred' || (c.aiSummary || c.summary || '').toLowerCase().includes('emergency') || (c.aiSummary || c.summary || '').toLowerCase().includes('leak'))).length },
+                { id: 'booking', label: '📅 Booking Requests', count: calls.filter((c: any) => (c.outcome === 'appointment_booked' || (c.aiSummary || c.summary || '').toLowerCase().includes('appointment') || (c.aiSummary || c.summary || '').toLowerCase().includes('book'))).length },
+                { id: 'pricing', label: '💰 Pricing & Estimates' },
+                { id: 'routine', label: 'ℹ️ Routine Inquiries' },
+              ].map((pill) => (
+                <button
+                  key={pill.id}
+                  type="button"
+                  onClick={() => setIntentFilter(pill.id as any)}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all border ${
+                    intentFilter === pill.id
+                      ? 'bg-slate-900 text-white border-slate-900 shadow-xs'
+                      : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                  }`}
+                >
+                  {pill.label}
+                  {pill.count !== undefined && pill.count > 0 && (
+                    <span className={`ml-1.5 px-1.5 py-0.2 rounded-full text-[10px] font-bold ${intentFilter === pill.id ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-700'}`}>
+                      {pill.count}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+
             {/* Calls Table Card */}
             {loading ? (
               <div className="py-24 flex flex-col items-center justify-center gap-3 text-slate-400">
                 <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
                 <p className="text-sm font-medium">Loading call recordings &amp; transcripts...</p>
               </div>
-            ) : calls.length === 0 ? (
+            ) : displayedCalls.length === 0 ? (
               <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center space-y-3 shadow-2xs">
                 <div className="w-12 h-12 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center mx-auto border border-blue-100">
                   <PhoneCall className="w-6 h-6" />
                 </div>
-                <h3 className="text-base font-bold text-slate-900">No Calls Recorded Yet</h3>
+                <h3 className="text-base font-bold text-slate-900">No Calls Match This Filter</h3>
                 <p className="text-xs text-slate-500 max-w-sm mx-auto">
-                  Incoming calls will appear here automatically, complete with live audio recordings, sentiment analysis, and AI transcripts.
+                  Select a different urgency pill or clear your search to view other recorded conversations.
                 </p>
                 <div className="pt-2">
                   <Button
                     size="sm"
-                    onClick={() => setSimModalOpen(true)}
-                    className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-xs"
+                    onClick={() => setIntentFilter('all')}
+                    className="bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs shadow-xs"
                   >
-                    Simulate Sample Call
+                    View All Calls
                   </Button>
                 </div>
               </div>
@@ -638,19 +703,24 @@ export default function CallsPage() {
               <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-2xs">
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-xs text-slate-700">
+                    <caption className="sr-only">
+                      Call history. Selecting a row opens its transcript.
+                    </caption>
                     <thead className="bg-slate-50/80 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider text-[11px]">
                       <tr>
-                        <th className="px-5 py-3.5">Caller / Customer</th>
-                        <th className="px-5 py-3.5">Direction</th>
-                        <th className="px-5 py-3.5">AI Outcome</th>
-                        <th className="px-5 py-3.5">Status</th>
-                        <th className="px-5 py-3.5">Date &amp; Time</th>
-                        <th className="px-5 py-3.5">Duration</th>
-                        <th className="px-5 py-3.5 text-right">Voice Audio &amp; Transcript</th>
+                        <th scope="col" className="px-5 py-3.5">Caller / Customer</th>
+                        <th scope="col" className="px-5 py-3.5">Direction</th>
+                        <th scope="col" className="px-5 py-3.5">AI Outcome</th>
+                        <th scope="col" className="px-5 py-3.5">Status</th>
+                        <th scope="col" className="px-5 py-3.5">Date &amp; Time</th>
+                        <th scope="col" className="px-5 py-3.5">Duration</th>
+                        <th scope="col" className="px-5 py-3.5 text-right">
+                          Transcript
+                        </th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {calls.map((call) => {
+                      {displayedCalls.map((call) => {
                         const cust = call.customerId as any;
                         const id = call._id || (call as any).id;
                         const outcome = (call as any).outcome || 'inquiry_answered';
@@ -658,10 +728,28 @@ export default function CallsPage() {
                         const hasTranscript = (call as any).transcript?.length > 0 || (call as any).aiHandled;
 
                         return (
+                          /*
+                            The row is the control that opens a transcript, so it
+                            has to be reachable and operable from the keyboard.
+                            Previously it was click-only, which meant keyboard and
+                            screen reader users could not read any transcript at
+                            all.
+                          */
                           <tr
                             key={id}
                             onClick={() => handleOpenTranscript(id)}
-                            className="hover:bg-slate-50/80 cursor-pointer transition-colors group"
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' || e.key === ' ') {
+                                e.preventDefault();
+                                handleOpenTranscript(id);
+                              }
+                            }}
+                            tabIndex={0}
+                            role="button"
+                            aria-label={`Open transcript for call from ${
+                              cust?.firstName ? `${cust.firstName} ${cust.lastName || ''}`.trim() : call.from
+                            }`}
+                            className="hover:bg-slate-50/80 focus-visible:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-blue-600 cursor-pointer transition-colors group"
                           >
                             {/* Caller */}
                             <td className="px-5 py-3.5">
@@ -711,10 +799,10 @@ export default function CallsPage() {
                             <td className="px-5 py-3.5">
                               <span
                                 className={`text-[10px] px-2 py-0.5 rounded-full border ${
-                                  STATUS_BADGES[call.status]?.class || 'bg-slate-100 text-slate-700 border-slate-200'
+                                  STATUS_BADGES[call.status as CallStatus]?.class || 'bg-slate-100 text-slate-700 border-slate-200'
                                 }`}
                               >
-                                {STATUS_BADGES[call.status]?.label || call.status}
+                                {STATUS_BADGES[call.status as CallStatus]?.label || call.status}
                               </span>
                             </td>
 
@@ -790,17 +878,28 @@ export default function CallsPage() {
         {/* ========================================================================= */}
         {selectedCallId && (
           <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 animate-in fade-in duration-200">
-            <div className="bg-white border border-slate-200 rounded-3xl w-full max-w-4xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden animate-in zoom-in-95 duration-150">
-              
+            {/*
+              Escape to close, focus moved in and trapped, focus returned to the
+              row on close — none of which happened before, so a keyboard user
+              who opened this was stranded behind it.
+            */}
+            <div
+              ref={transcriptDialogRef}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="transcript-modal-title"
+              tabIndex={-1}
+              className="bg-white border border-slate-200 rounded-3xl w-full max-w-4xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden animate-in zoom-in-95 duration-150"
+            >
               {/* Studio Modal Header */}
               <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50/70">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-600 text-white flex items-center justify-center shadow-md shadow-blue-500/20">
-                    <Bot className="w-5 h-5" />
+                    <Bot className="w-5 h-5" aria-hidden="true" />
                   </div>
                   <div>
                     <div className="flex items-center gap-2">
-                      <h3 className="text-base font-black text-slate-900">
+                      <h3 id="transcript-modal-title" className="text-base font-black text-slate-900">
                         Voice Call Review &amp; AI Transcript
                       </h3>
                       {transcriptData?.outcome && (
@@ -810,7 +909,18 @@ export default function CallsPage() {
                       )}
                     </div>
                     <p className="text-xs text-slate-500 font-medium mt-0.5">
-                      Caller: <span className="text-slate-900 font-bold font-mono">{transcriptData?.customer?.phone || transcriptData?.callSid || selectedCallId}</span> • Recorded via Twilio Media Stream
+                      {/*
+                        No call audio is stored anywhere — CallLog.recordingUrl is
+                        never populated. What exists is the live transcript, and
+                        the playback below is this browser reading it aloud. The
+                        old "Recorded via Twilio Media Stream" wording implied a
+                        recording an operator could be asked to produce.
+                      */}
+                      Caller:{' '}
+                      <span className="text-slate-900 font-bold font-mono">
+                        {transcriptData?.customer?.phone || transcriptData?.callSid || selectedCallId}
+                      </span>{' '}
+                      • Transcribed live during the call
                     </p>
                   </div>
                 </div>
@@ -818,9 +928,9 @@ export default function CallsPage() {
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
+                    aria-label="Close transcript"
                     onClick={() => {
-                      stopAudio();
-                      setSelectedCallId(null);
+                      closeTranscript();
                     }}
                     className="w-8 h-8 rounded-xl hover:bg-slate-200/80 text-slate-400 hover:text-slate-700 flex items-center justify-center transition-colors"
                   >
@@ -838,7 +948,12 @@ export default function CallsPage() {
                       type="button"
                       onClick={handlePlayFullConversation}
                       className="w-12 h-12 rounded-full bg-blue-600 hover:bg-blue-500 text-white flex items-center justify-center shrink-0 shadow-lg shadow-blue-500/30 transition-all active:scale-95 group"
-                      title={isPlayingAudio ? 'Pause Voice Stream' : 'Play Full Call Audio'}
+                      aria-label={
+                        isPlayingAudio ? 'Stop reading transcript' : 'Read transcript aloud'
+                      }
+                      title={
+                        isPlayingAudio ? 'Stop reading' : 'Read the transcript aloud'
+                      }
                     >
                       {isPlayingAudio ? (
                         <Pause className="w-5 h-5 fill-current" />
@@ -862,7 +977,7 @@ export default function CallsPage() {
                     <div>
                       <div className="flex items-center gap-2">
                         <span className="text-xs font-bold text-white tracking-tight">
-                          {isPlayingAudio ? 'Live Audio Playback' : 'Master Voice Track'}
+                          {isPlayingAudio ? 'Reading transcript aloud' : 'Transcript playback'}
                         </span>
                         {isPlayingAudio && (
                           <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-black bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 animate-pulse">
@@ -998,14 +1113,23 @@ export default function CallsPage() {
 
                   {loadingTranscript ? (
                     <div className="py-16 flex flex-col items-center justify-center gap-2 text-slate-400">
-                      <Loader2 className="w-6 h-6 animate-spin text-blue-600" />
-                      <p className="text-xs font-medium">Loading dialogue turns and audio speech...</p>
+                      <Loader2 className="w-6 h-6 animate-spin text-blue-600" aria-hidden="true" />
+                      <p className="text-xs font-medium">Loading the conversation…</p>
+                    </div>
+                  ) : transcriptError ? (
+                    <div
+                      role="alert"
+                      className="flex items-start gap-2 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-xs text-rose-800"
+                    >
+                      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                      <span>{transcriptError}</span>
                     </div>
                   ) : !transcriptData?.transcript || transcriptData.transcript.length === 0 ? (
                     <div className="py-12 text-center text-xs text-slate-500 bg-slate-50 rounded-2xl border border-dashed border-slate-200 p-6">
-                      <p className="font-bold text-slate-700">No dialogue recorded for this session.</p>
+                      <p className="font-bold text-slate-700">No transcript for this call.</p>
                       <p className="text-[11px] text-slate-500 mt-1">
-                        Live Twilio WebSockets automatically transcribe and log caller and receptionist speech turns.
+                        That usually means the call was not answered by the assistant, or speech
+                        recognition was unavailable while it ran.
                       </p>
                     </div>
                   ) : (
@@ -1105,57 +1229,121 @@ export default function CallsPage() {
                       Executive Call Summary
                     </p>
                     <p className="text-xs text-slate-800 leading-relaxed font-medium">
-                      {transcriptData?.summary ||
-                        'Caller reported upstairs AC blowing room-temperature air on a 95°F day. Alex AI qualified urgency, verified Dallas 75201 territory, and booked an emergency morning diagnostic slot.'}
+                      {transcriptData?.summary || (
+                        <span className="text-slate-400">
+                          No summary was generated for this call.
+                        </span>
+                      )}
                     </p>
                   </div>
 
-                  {/* Extracted Details & Lead Status */}
+                  {/*
+                    Real outcome of this specific call.
+
+                    This panel previously displayed a fixed script — "Saturday
+                    9:00 AM - 11:00 AM ($89 Diagnostic Credited)", "Mike R.
+                    (Senior HVAC Specialist)", "742 Evergreen Terrace, Dallas TX
+                    75201" and an SMS "Delivered to +1 (214) 883-9120" — on every
+                    call, regardless of what actually happened. The transcript
+                    beside it was real, so the two disagreed.
+                  */}
                   <div className="p-4 rounded-2xl bg-white border border-slate-200 shadow-2xs space-y-3">
                     <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                      Autonomous Dispatched Actions
+                      What came out of this call
                     </p>
 
                     <div className="space-y-2.5 text-xs text-slate-700">
-                      <div className="flex items-start gap-2.5">
-                        <Calendar className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                        <div>
-                          <p className="font-bold text-slate-900">Appointment Locked</p>
-                          <p className="text-[11px] text-slate-500">
-                            Saturday 9:00 AM - 11:00 AM ($89 Diagnostic Credited)
-                          </p>
-                        </div>
-                      </div>
+                      {transcriptData?.appointment ? (
+                        <>
+                          <div className="flex items-start gap-2.5">
+                            <Calendar className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                            <div>
+                              <p className="font-bold text-slate-900">Appointment booked</p>
+                              <p className="text-[11px] text-slate-500">
+                                {transcriptData.appointment.startAt
+                                  ? new Date(transcriptData.appointment.startAt).toLocaleString(
+                                      'en-US',
+                                      {
+                                        weekday: 'short',
+                                        month: 'short',
+                                        day: 'numeric',
+                                        hour: 'numeric',
+                                        minute: '2-digit',
+                                      }
+                                    )
+                                  : 'Time not recorded'}
+                                {transcriptData.appointment.status
+                                  ? ` • ${transcriptData.appointment.status}`
+                                  : ''}
+                              </p>
+                            </div>
+                          </div>
 
-                      <div className="flex items-start gap-2.5">
-                        <User className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
-                        <div>
-                          <p className="font-bold text-slate-900">Assigned Technician</p>
-                          <p className="text-[11px] text-slate-500">
-                            Mike R. (Senior HVAC Specialist)
-                          </p>
-                        </div>
-                      </div>
+                          {transcriptData.appointment.technicianId?.name && (
+                            <div className="flex items-start gap-2.5">
+                              <User className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+                              <div>
+                                <p className="font-bold text-slate-900">Assigned technician</p>
+                                <p className="text-[11px] text-slate-500">
+                                  {transcriptData.appointment.technicianId.name}
+                                </p>
+                              </div>
+                            </div>
+                          )}
 
-                      <div className="flex items-start gap-2.5">
-                        <MapPin className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                        <div>
-                          <p className="font-bold text-slate-900">Verified Address</p>
-                          <p className="text-[11px] text-slate-500">
-                            742 Evergreen Terrace, Dallas TX 75201
-                          </p>
+                          {transcriptData.appointment.serviceAddress && (
+                            <div className="flex items-start gap-2.5">
+                              <MapPin className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                              <div>
+                                <p className="font-bold text-slate-900">Service address</p>
+                                <p className="text-[11px] text-slate-500">
+                                  {transcriptData.appointment.serviceAddress}
+                                </p>
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      ) : transcriptData?.lead ? (
+                        <div className="flex items-start gap-2.5">
+                          <UserPlus className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+                          <div>
+                            <p className="font-bold text-slate-900">Lead captured</p>
+                            <p className="text-[11px] text-slate-500">
+                              {transcriptData.lead.title || 'Service request'}
+                              {transcriptData.lead.urgency
+                                ? ` • ${transcriptData.lead.urgency}`
+                                : ''}
+                            </p>
+                          </div>
                         </div>
-                      </div>
+                      ) : (
+                        <div className="flex items-start gap-2.5">
+                          <CheckCheck className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" />
+                          <div>
+                            <p className="font-bold text-slate-900">No booking or lead</p>
+                            <p className="text-[11px] text-slate-500">
+                              {transcriptData?.outcome
+                                ? transcriptData.outcome.replace(/_/g, ' ')
+                                : 'Nothing was recorded from this call.'}
+                            </p>
+                          </div>
+                        </div>
+                      )}
 
-                      <div className="flex items-start gap-2.5">
-                        <CheckCheck className="w-4 h-4 text-purple-600 shrink-0 mt-0.5" />
-                        <div>
-                          <p className="font-bold text-slate-900">Instant SMS Confirmation</p>
-                          <p className="text-[11px] text-slate-500">
-                            Delivered to {transcriptData?.customer?.phone || '+1 (214) 883-9120'}
-                          </p>
+                      {transcriptData?.customer?.phone && (
+                        <div className="flex items-start gap-2.5">
+                          <User className="w-4 h-4 text-slate-500 shrink-0 mt-0.5" />
+                          <div>
+                            <p className="font-bold text-slate-900">Matched customer</p>
+                            <p className="text-[11px] text-slate-500">
+                              {[transcriptData.customer.firstName, transcriptData.customer.lastName]
+                                .filter(Boolean)
+                                .join(' ') || 'Unnamed'}{' '}
+                              • {transcriptData.customer.phone}
+                            </p>
+                          </div>
                         </div>
-                      </div>
+                      )}
                     </div>
                   </div>
 
@@ -1215,7 +1403,7 @@ export default function CallsPage() {
                     )}
                   </Button>
 
-                  {transcriptData?.appointment && (
+                  {transcriptData?.appointment ? (
                     <Link href="/app/appointments">
                       <Button
                         size="sm"
@@ -1226,6 +1414,19 @@ export default function CallsPage() {
                         View Appointment Slot
                       </Button>
                     </Link>
+                  ) : (
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        const phone = transcriptData?.call?.callerNumber || transcriptData?.customer?.phone || '';
+                        const notes = transcriptData?.summary || transcriptData?.call?.aiSummary || 'Call inquiry converted to appointment';
+                        window.location.href = `/app/appointments?action=new&phone=${encodeURIComponent(phone)}&notes=${encodeURIComponent(notes)}`;
+                      }}
+                      className="h-8 text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-bold flex items-center gap-1.5 shadow-xs"
+                    >
+                      <Calendar className="w-3.5 h-3.5 mr-1" />
+                      Create Appointment from Call
+                    </Button>
                   )}
                 </div>
 
@@ -1245,81 +1446,19 @@ export default function CallsPage() {
           </div>
         )}
 
-        {/* Inbound Call Simulation Modal */}
-        {simModalOpen && (
-          <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
-            <div className="bg-white border border-slate-200 rounded-3xl w-full max-w-md p-6 shadow-2xl space-y-4">
-              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                  <Sparkles className="w-5 h-5 text-blue-600" />
-                  Simulate Live Inbound Call
-                </h3>
-                <button
-                  type="button"
-                  onClick={() => setSimModalOpen(false)}
-                  className="w-7 h-7 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-700 flex items-center justify-center"
-                >
-                  ✕
-                </button>
-              </div>
-
-              <p className="text-xs text-slate-600 leading-relaxed">
-                Trigger a realistic emergency HVAC customer call. Alex AI will pick up, qualify the caller in Dallas 75201, and book an appointment slot.
-              </p>
-
-              <form onSubmit={handleSimulate} className="space-y-4">
-                <div>
-                  <label className="text-xs font-bold text-slate-700 block mb-1.5">
-                    Caller Phone Number
-                  </label>
-                  <Input
-                    type="text"
-                    required
-                    value={simPhone}
-                    onChange={(e) => setSimPhone(e.target.value)}
-                    className="text-xs bg-white border-slate-200 text-slate-900 rounded-xl"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-xs font-bold text-slate-700 block mb-1.5">
-                    Call Duration (seconds)
-                  </label>
-                  <Input
-                    type="number"
-                    required
-                    min={10}
-                    max={600}
-                    value={simDuration}
-                    onChange={(e) => setSimDuration(e.target.value)}
-                    className="text-xs bg-white border-slate-200 text-slate-900 rounded-xl"
-                  />
-                </div>
-
-                <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-100">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setSimModalOpen(false)}
-                    className="text-xs text-slate-500 font-semibold"
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    type="submit"
-                    size="sm"
-                    disabled={simulating}
-                    className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-xs px-4"
-                  >
-                    {simulating ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : null}
-                    Trigger Live Simulation
-                  </Button>
-                </div>
-              </form>
-            </div>
-          </div>
-        )}
+        {/*
+          Replaces a "Simulate Live Inbound Call" modal that asked for a caller
+          number and a duration, then wrote a fabricated Dallas 75201 emergency
+          conversation — transcript, technician, booked appointment — into the
+          call history as a genuine AI-handled call.
+        */}
+        <TestCallModal
+          isOpen={testCallOpen}
+          onClose={() => {
+            setTestCallOpen(false);
+            fetchCalls();
+          }}
+        />
 
         {/* AI Coaching Notes Modal */}
         {selectedCoaching && (

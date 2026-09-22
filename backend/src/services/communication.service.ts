@@ -9,6 +9,8 @@ import {
   MessageType,
 } from '../types/communication.types';
 import { config } from '../config/env';
+import { AppError } from '../types';
+import { logger } from '../utils/logger';
 import twilio from 'twilio';
 
 export class CommunicationService {
@@ -88,32 +90,57 @@ export class CommunicationService {
     input: SendMessageInput
   ): Promise<ICommunicationLog> {
     const business = await Business.findById(businessId);
-    if (!business) throw new Error('Business not found');
+    if (!business) throw new AppError('Business not found', 404);
 
-    // Check opt-out status if customer is specified
+    /**
+     * These are refusals, not faults.
+     *
+     * All three used `throw new Error`, which the error handler had no case for,
+     * so an opt-out or a quiet-hours block came back as a 500 — indistinguishable
+     * from the server being broken, and the UI could not tell the operator why
+     * their message was not sent.
+     */
     if (input.customerId) {
       const customer = await Customer.findOne({ _id: input.customerId, businessId });
       if (customer && (customer as any).isOptedOut) {
-        throw new Error('Customer has opted out of receiving SMS messages');
+        throw new AppError(
+          'This customer has opted out of text messages and cannot be contacted by SMS.',
+          409
+        );
       }
     }
 
     // Check quiet hours unless explicitly bypassed (e.g. emergency or customer-initiated)
     if (!input.bypassQuietHours && this.isWithinQuietHours(business.timezone)) {
-      throw new Error(
-        `Outbound SMS blocked: Current time is outside allowed TCPA hours (8:00 AM - 9:00 PM ${business.timezone || 'local time'}).`
+      throw new AppError(
+        `Outside permitted texting hours (8:00 AM – 9:00 PM ${business.timezone || 'local time'}). This message was not sent.`,
+        409
       );
     }
 
-    // Determine outbound From number: assigned business number or env default
-    let fromNumber = config.twilioPhoneNumber || '+15550001234';
-    const primaryPhone = await BusinessPhoneNumber.findOne({ businessId, isPrimary: true, status: 'assigned' });
-    if (primaryPhone) {
-      fromNumber = primaryPhone.phoneNumber;
-    }
+    // Resolve the outbound From number.
+    //
+    // This lookup previously filtered on `status: 'assigned'`, but the phone
+    // number schema only stores 'active' or 'inactive' — so it never matched and
+    // every message fell back to the env number, or to a hardcoded
+    // '+15550001234' that belongs to nobody.
+    const primaryPhone = await BusinessPhoneNumber.findOne({
+      businessId,
+      isPrimary: true,
+      status: 'active',
+    });
+    const fromNumber = primaryPhone?.phoneNumber || config.twilioPhoneNumber || null;
 
     const type = input.type || 'custom';
     const body = input.body.trim();
+
+    // Refuse before writing a log entry that would imply an attempt was made.
+    if (!fromNumber) {
+      throw new AppError(
+        'No active phone line is connected to this business, so SMS cannot be sent. Connect a number in Settings → Phone first.',
+        409
+      );
+    }
 
     // Create log in queued state
     const log = await CommunicationLog.create({
@@ -131,29 +158,57 @@ export class CommunicationService {
     });
 
     const client = this.getClient();
-    if (client && config.twilioAccountSid && config.twilioAuthToken && !fromNumber.includes('555000')) {
-      try {
-        const twilioMsg = await client.messages.create({
-          from: fromNumber,
-          to: input.to,
-          body,
-          statusCallback: `${config.twilioWebhookBaseUrl}/api/webhooks/twilio/sms-status`,
-        });
-        log.twilioSid = twilioMsg.sid;
-        log.status = 'sent';
-        await log.save();
-      } catch (err: any) {
-        log.status = 'failed';
-        log.errorMessage = err.message || 'Twilio send error';
-        log.errorCode = err.code ? String(err.code) : undefined;
-        await log.save();
-        throw err;
-      }
-    } else {
-      // Mock / Simulation mode for development or testing without live Twilio credits
-      log.twilioSid = `SM_mock_${Date.now()}`;
-      log.status = 'delivered';
+
+    // Not configured is a failure, not a success.
+    //
+    // This branch used to stamp the log with `status: 'delivered'` and a
+    // fabricated `SM_mock_<timestamp>` SID. Nothing was ever sent, yet the
+    // owner's dashboard reported the customer had received the message — so
+    // missed reminders and unanswered follow-ups were invisible.
+    if (!client) {
+      log.status = 'failed';
+      log.errorCode = 'telephony_not_configured';
+      log.errorMessage =
+        'Twilio credentials are not configured on this server, so no message was sent.';
       await log.save();
+
+      logger.error('sms_send_skipped_not_configured', {
+        businessId: String(businessId),
+        to: input.to,
+        type,
+      });
+
+      throw new AppError(
+        'SMS could not be sent because telephony is not configured on this server.',
+        503
+      );
+    }
+
+    try {
+      const twilioMsg = await client.messages.create({
+        from: fromNumber,
+        to: input.to,
+        body,
+        statusCallback: `${config.twilioWebhookBaseUrl}/api/webhooks/twilio/sms-status`,
+      });
+      // 'sent' — not 'delivered'. Delivery is only known once Twilio calls the
+      // status webhook back.
+      log.twilioSid = twilioMsg.sid;
+      log.status = 'sent';
+      await log.save();
+    } catch (err: any) {
+      log.status = 'failed';
+      log.errorMessage = err.message || 'Twilio send error';
+      log.errorCode = err.code ? String(err.code) : undefined;
+      await log.save();
+      logger.error('sms_send_failed', {
+        businessId: String(businessId),
+        to: input.to,
+        type,
+        reason: err?.message,
+        code: err?.code,
+      });
+      throw err;
     }
 
     return log;
@@ -222,7 +277,11 @@ export class CommunicationService {
     // Area 4: Review / CSAT rating reply (1-5 stars)
     try {
       const { ReviewReputationService } = await import('./review-reputation.service');
-      const ratingRes = await ReviewReputationService.handleCustomerRatingReply(From, text);
+      const ratingRes = await ReviewReputationService.handleCustomerRatingReply(
+        businessId,
+        From,
+        text
+      );
       if (ratingRes.handled && ratingRes.responseText) {
         return { reply: ratingRes.responseText };
       }
@@ -233,7 +292,11 @@ export class CommunicationService {
     // Area 1: Speed-to-lead recovery reply
     try {
       const { LeadRecoveryService } = await import('./lead-recovery.service');
-      const recoveryRes = await LeadRecoveryService.handleInboundCustomerReply(From, text);
+      const recoveryRes = await LeadRecoveryService.handleInboundCustomerReply(
+        businessId,
+        From,
+        text
+      );
       if (recoveryRes.handled && recoveryRes.replyMessage) {
         return { reply: recoveryRes.replyMessage };
       }

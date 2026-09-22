@@ -18,6 +18,12 @@ import leadRecoveryRoutes from './lead-recovery.routes';
 import dispatchRoutes from './dispatch.routes';
 import reviewRoutes from './review.routes';
 import billingRoutes from './billing.routes';
+import { estimateRoutes } from './estimate.routes';
+import { invoiceRoutes } from './invoice.routes';
+import { workerRoutes } from './worker.routes';
+import { portalRoutes } from './portal.routes';
+import demoRequestRoutes from './demo-request.routes';
+import dashboardRoutes from './dashboard.routes';
 
 const apiRouter = Router();
 
@@ -26,6 +32,7 @@ apiRouter.use('/health', healthRoutes);
 apiRouter.use('/auth', authRoutes);
 apiRouter.use('/business', businessRoutes);
 apiRouter.use('/onboarding', onboardingRoutes);
+apiRouter.use('/dashboard', dashboardRoutes);
 apiRouter.use('/customers', customerRoutes);
 apiRouter.use('/leads', leadRoutes);
 apiRouter.use('/services', serviceRoutes);
@@ -40,6 +47,11 @@ apiRouter.use('/recovery', leadRecoveryRoutes);
 apiRouter.use('/dispatch', dispatchRoutes);
 apiRouter.use('/reviews', reviewRoutes);
 apiRouter.use('/billing', billingRoutes);
+apiRouter.use('/estimates', estimateRoutes);
+apiRouter.use('/invoices', invoiceRoutes);
+apiRouter.use('/worker', workerRoutes);
+apiRouter.use('/portal', portalRoutes);
+apiRouter.use('/demo-requests', demoRequestRoutes);
 apiRouter.use('/webhooks/twilio', webhookRoutes);
 
 export default apiRouter;

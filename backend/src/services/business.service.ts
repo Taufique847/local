@@ -1,4 +1,5 @@
 import { Business } from '../models/business.model';
+import { defaultServicesForTrade } from '../config/trade-catalogs';
 import { 
   BusinessDTO, 
   IBusiness, 
@@ -64,14 +65,21 @@ export class BusinessService {
     let business = await Business.findOne({ ownerId });
 
     if (!business) {
+      const businessType = data.businessType || 'HVAC';
+
       business = new Business({
         ownerId,
         name: data.name.trim(),
-        businessType: data.businessType || 'HVAC',
+        businessType,
         phone: data.phone?.trim(),
         email: data.email?.trim(),
         website: data.website?.trim(),
         address: data.address || {},
+        // Passed explicitly so the starter catalogue matches the trade without
+        // depending on Mongoose default-evaluation order. Every business used to
+        // get the HVAC list, so a plumber's first job was deleting AC services —
+        // and until they did, the voice assistant offered them to callers.
+        services: defaultServicesForTrade(businessType),
         onboardingStatus: 'in_progress',
         onboardingStep: 'services',
       });
@@ -146,6 +154,44 @@ export class BusinessService {
     }
 
     if (business.onboardingStep === 'hours') {
+      business.onboardingStep = 'phone';
+    }
+
+    await business.save();
+    return this.toDTO(business);
+  }
+
+  /**
+   * Step 5: telephony setup.
+   *
+   * The phone number itself is provisioned through /api/phone-numbers; this step
+   * records the human escalation number and advances onboarding. It is the step
+   * that was missing entirely — onboarding used to complete with no line
+   * connected, so a "finished" account still could not answer a call.
+   */
+  public static async completePhoneStep(
+    ownerId: string,
+    input: { emergencyTransferPhone?: string; googleReviewUrl?: string }
+  ): Promise<BusinessDTO> {
+    const business = await Business.findOne({ ownerId });
+    if (!business) {
+      throw new AppError('Please configure your business profile first', 400);
+    }
+
+    if (input.googleReviewUrl !== undefined) {
+      business.googleReviewUrl = input.googleReviewUrl.trim() || undefined;
+    }
+
+    // The escalation number lives on the business policy, which is the single
+    // source of truth the transfer_call tool reads.
+    if (input.emergencyTransferPhone !== undefined) {
+      const { PolicyGuardrailsService } = await import('./policy-guardrails.service');
+      await PolicyGuardrailsService.updatePolicy(business._id, {
+        emergencyTransferPhone: input.emergencyTransferPhone.trim() || undefined,
+      } as any);
+    }
+
+    if (business.onboardingStep === 'phone' || business.onboardingStep === 'hours') {
       business.onboardingStep = 'review';
     }
 
@@ -153,7 +199,7 @@ export class BusinessService {
     return this.toDTO(business);
   }
 
-  // Step 5: Complete onboarding
+  // Step 6: Complete onboarding
   public static async completeOnboarding(ownerId: string): Promise<BusinessDTO> {
     const business = await Business.findOne({ ownerId });
     if (!business) {

@@ -1,0 +1,95 @@
+# Local full-stack environment: MongoDB + backend API + Next.js frontend.
+#
+# Usage:
+#   cp .env.example .env     # fill in provider keys
+#   docker compose up --build
+#
+# This is a DEVELOPMENT convenience. For production, run the two images behind a
+# real load balancer with a managed MongoDB, and set ENABLE_SCHEDULER=true on
+# exactly one backend replica (see the scheduler note below).
+
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    ports:
+      # Exposed so you can inspect data with Compass during development.
+      - '27017:27017'
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ['CMD', 'mongosh', '--quiet', '--eval', "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  backend:
+    build:
+      context: ./backend
+      target: production
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+    ports:
+      - '5000:5000'
+    environment:
+      NODE_ENV: production
+      PORT: 5000
+      MONGODB_URI: mongodb://mongo:27017/bluecollar_ai
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      # REQUIRED. The server refuses to boot in production without it.
+      # Generate: node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+
+      # Telephony
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+      TWILIO_PHONE_NUMBER: ${TWILIO_PHONE_NUMBER:-}
+      # Must be the PUBLIC https URL Twilio calls (e.g. an ngrok tunnel).
+      # Signatures are verified against it, so a wrong value rejects real traffic.
+      TWILIO_WEBHOOK_BASE_URL: ${TWILIO_WEBHOOK_BASE_URL:-http://localhost:5000}
+
+      # Billing
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      TRIAL_DAYS: ${TRIAL_DAYS:-14}
+
+      # Voice engine. `realtime` needs BOTH Deepgram and OpenAI keys; without
+      # them the factory logs a warning and falls back to `mock`.
+      VOICE_PROVIDER: ${VOICE_PROVIDER:-mock}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      DEEPGRAM_API_KEY: ${DEEPGRAM_API_KEY:-}
+      DEEPGRAM_STT_MODEL: ${DEEPGRAM_STT_MODEL:-nova-2-phonecall}
+      DEEPGRAM_TTS_MODEL: ${DEEPGRAM_TTS_MODEL:-aura-asteria-en}
+      MAX_CALL_DURATION_SECONDS: ${MAX_CALL_DURATION_SECONDS:-600}
+
+      # Background jobs (drip follow-ups, review surveys, SLA sweeps, trial
+      # expiry). Must be true on EXACTLY ONE replica — two schedulers will
+      # double-send the same SMS.
+      ENABLE_SCHEDULER: ${ENABLE_SCHEDULER:-true}
+
+  frontend:
+    build:
+      context: ./frontend
+      target: production
+      args:
+        # NEXT_PUBLIC_* are compiled into the browser bundle, so they are build
+        # args rather than runtime environment.
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:5000}
+        NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-http://localhost:3000}
+        NEXT_PUBLIC_PLAUSIBLE_DOMAIN: ${NEXT_PUBLIC_PLAUSIBLE_DOMAIN:-}
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - '3000:3000'
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+
+volumes:
+  mongo-data:

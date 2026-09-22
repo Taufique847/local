@@ -22,11 +22,26 @@ export interface UpdateKnowledgeInput {
 
 export class KnowledgeBaseService {
   /**
-   * Seeds default HVAC knowledge items if business knowledge base is empty
+   * Seeds starter knowledge items when a business has none.
+   *
+   * The content below is HVAC-specific — warranty terms, refrigerant, furnace
+   * behaviour — and it feeds the voice assistant's answers. It was previously
+   * seeded for every business regardless of trade, so a plumber's assistant
+   * could quote HVAC warranty terms to a caller as though they were the
+   * plumber's own.
+   *
+   * Only HVAC businesses get it. Others start empty, which is honest: an empty
+   * knowledge base makes the assistant say it does not know, rather than confidently
+   * state another trade's policy.
    */
   public static async seedDefaultHVACKnowledge(businessId: Types.ObjectId | string): Promise<void> {
     const count = await KnowledgeItem.countDocuments({ businessId });
     if (count > 0) return;
+
+    const { Business } = await import('../models/business.model');
+    const business = await Business.findById(businessId).select('businessType').lean();
+
+    if (business && business.businessType !== 'HVAC') return;
 
     const defaults = [
       {

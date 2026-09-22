@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
+import Link from 'next/link';
 import { DashboardShell } from '@/components/dashboard/dashboard-shell';
 import {
   Settings,
@@ -13,6 +14,7 @@ import {
   Save,
   Loader2,
   Sparkles,
+  AlertCircle,
   AlertTriangle,
   Clock,
   DollarSign,
@@ -23,78 +25,93 @@ import {
   HelpCircle,
   Wrench,
   ShieldAlert,
+  PhoneForwarded,
+  ChevronRight,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
+import { DispatchService, ServiceZone } from '@/services/operations.service';
+import {
+  KnowledgeService,
+  KnowledgeItem,
+  PolicyService,
+  BusinessPolicy,
+  POLICY_DEFAULTS,
+} from '@/services/ai-config.service';
+import { BusinessService } from '@/services/business.service';
+import { toErrorMessage } from '@/lib/api-client';
+import { useToast } from '@/components/ui/toast';
 
 export default function SettingsPage() {
+  const toast = useToast();
   const [activeTab, setActiveTab] = useState<'knowledge' | 'policies' | 'zones' | 'reviews'>('knowledge');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // Tab 1: Knowledge Base FAQs
-  const [faqs, setFaqs] = useState<any[]>([]);
+  const [faqs, setFaqs] = useState<KnowledgeItem[]>([]);
   const [faqModalOpen, setFaqModalOpen] = useState(false);
   const [newQuestion, setNewQuestion] = useState('');
   const [newAnswer, setNewAnswer] = useState('');
   const [newCategory, setNewCategory] = useState('pricing');
+  const [savingFaq, setSavingFaq] = useState(false);
+  const [faqError, setFaqError] = useState<string | null>(null);
 
   // Tab 2: Policy Configuration
-  const [policies, setPolicies] = useState<{
-    minAdvanceNoticeHours: number;
-    maxBookingHorizonDays: number;
-    emergencyKeywords: string[];
-    diagnosticFee: number;
-    emergencyFee: number;
-  }>({
-    minAdvanceNoticeHours: 2,
-    maxBookingHorizonDays: 60,
-    emergencyKeywords: ['gas leak', 'carbon monoxide', 'sparks', 'smoke', 'flooding', 'freezing'],
-    diagnosticFee: 89,
-    emergencyFee: 149,
-  });
+  const [policies, setPolicies] = useState<BusinessPolicy>(POLICY_DEFAULTS);
   const [newKeywordInput, setNewKeywordInput] = useState('');
+  const [policyError, setPolicyError] = useState<string | null>(null);
 
   // Tab 3: Service Zones
-  const [zones, setZones] = useState<any[]>([]);
+  const [zones, setZones] = useState<ServiceZone[]>([]);
+  const [zoneFormOpen, setZoneFormOpen] = useState(false);
+  const [newZoneName, setNewZoneName] = useState('');
+  const [newZoneZips, setNewZoneZips] = useState('');
+  const [newZoneBuffer, setNewZoneBuffer] = useState('30');
+  const [savingZone, setSavingZone] = useState(false);
+  const [zoneError, setZoneError] = useState<string | null>(null);
 
-  // Tab 4: Reputation & Review Shielding
-  const [reputationStats, setReputationStats] = useState<any | null>(null);
-  const [googleReviewUrl, setGoogleReviewUrl] = useState(
-    'https://search.google.com/local/writereview?placeid=Apex-Heating-Air'
-  );
+  // Tab 4: Reputation & Review Shielding.
+  // Rating KPIs now live on /app/reviews rather than being duplicated here.
+  //
+  // Starts empty. The previous default was a fabricated Google URL containing a
+  // slug in place of a real Place ID, which produced a broken review link.
+  const [googleReviewUrl, setGoogleReviewUrl] = useState('');
+  const [savingReviewUrl, setSavingReviewUrl] = useState(false);
 
   const fetchSettingsData = useCallback(async () => {
     setLoading(true);
-    try {
-      const [kbRes, policyRes, zonesRes, repRes] = await Promise.all([
-        fetch(`${API_BASE_URL}/api/knowledge`, { credentials: 'include' }).then((r) => r.json()).catch(() => ({ items: [] })),
-        fetch(`${API_BASE_URL}/api/policies`, { credentials: 'include' }).then((r) => r.json()).catch(() => ({})),
-        fetch(`${API_BASE_URL}/api/dispatch/zones`, { credentials: 'include' }).then((r) => r.json()).catch(() => ({ zones: [] })),
-        fetch(`${API_BASE_URL}/api/reviews/stats`, { credentials: 'include' }).then((r) => r.json()).catch(() => null),
-      ]);
+    setLoadError(null);
 
-      if (kbRes.items) setFaqs(kbRes.items);
-      if (policyRes.policy) {
-        setPolicies({
-          minAdvanceNoticeHours: policyRes.policy.minAdvanceNoticeHours ?? 2,
-          maxBookingHorizonDays: policyRes.policy.maxBookingHorizonDays ?? 60,
-          emergencyKeywords: policyRes.policy.emergencyKeywords || ['gas leak', 'carbon monoxide', 'sparks', 'smoke', 'flooding'],
-          diagnosticFee: policyRes.policy.diagnosticFee ?? 89,
-          emergencyFee: policyRes.policy.emergencyFee ?? 149,
-        });
-      }
-      if (zonesRes.zones) setZones(zonesRes.zones);
-      if (repRes) setReputationStats(repRes);
-    } catch (err) {
-      console.error('Failed to load settings:', err);
-    } finally {
-      setLoading(false);
+    // allSettled so one failing module does not blank the whole page, but
+    // failures are still surfaced instead of being swallowed by `.catch(() => {})`
+    // the way they were before.
+    const [kbRes, policyRes, zonesRes, bizRes] = await Promise.allSettled([
+      KnowledgeService.list(),
+      PolicyService.get(),
+      DispatchService.getZones(),
+      BusinessService.getMyBusiness(),
+    ]);
+
+    if (kbRes.status === 'fulfilled') setFaqs(kbRes.value);
+    if (policyRes.status === 'fulfilled') setPolicies(policyRes.value);
+    if (zonesRes.status === 'fulfilled') setZones(zonesRes.value);
+    // The saved Google review link lives on the business record.
+    if (bizRes.status === 'fulfilled') setGoogleReviewUrl(bizRes.value?.googleReviewUrl ?? '');
+
+    const failed = [kbRes, policyRes, zonesRes, bizRes].filter(
+      (r): r is PromiseRejectedResult => r.status === 'rejected'
+    );
+    if (failed.length > 0) {
+      setLoadError(
+        toErrorMessage(failed[0].reason, 'Some settings could not be loaded. Try refreshing.')
+      );
     }
+
+    setLoading(false);
   }, []);
 
   useEffect(() => {
@@ -105,19 +122,16 @@ export default function SettingsPage() {
   const handleSavePolicies = async () => {
     setSaving(true);
     setSaveSuccess(false);
+    setPolicyError(null);
     try {
-      const res = await fetch(`${API_BASE_URL}/api/policies`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify(policies),
-      });
-      if (res.ok) {
-        setSaveSuccess(true);
-        setTimeout(() => setSaveSuccess(false), 3000);
-      }
+      const saved = await PolicyService.update(policies);
+      setPolicies((prev) => ({ ...prev, ...saved }));
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 3000);
     } catch (err) {
-      console.error('Failed to save policies:', err);
+      // Previously a failed save was only console.logged, so the operator saw
+      // nothing and assumed their guardrails had been applied.
+      setPolicyError(toErrorMessage(err, 'Could not save your guardrail settings.'));
     } finally {
       setSaving(false);
     }
@@ -151,39 +165,115 @@ export default function SettingsPage() {
     e.preventDefault();
     if (!newQuestion.trim() || !newAnswer.trim()) return;
 
+    setFaqError(null);
+    setSavingFaq(true);
     try {
-      const res = await fetch(`${API_BASE_URL}/api/knowledge`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          question: newQuestion.trim(),
-          answer: newAnswer.trim(),
-          category: newCategory,
-        }),
+      await KnowledgeService.create({
+        question: newQuestion.trim(),
+        answer: newAnswer.trim(),
+        category: newCategory,
       });
-
-      if (res.ok) {
-        setNewQuestion('');
-        setNewAnswer('');
-        setFaqModalOpen(false);
-        fetchSettingsData();
-      }
+      setNewQuestion('');
+      setNewAnswer('');
+      setFaqModalOpen(false);
+      setFaqs(await KnowledgeService.list());
+      toast.success('Answer saved', 'The AI can now use this when callers ask.');
     } catch (err) {
-      console.error('Failed to create FAQ:', err);
+      setFaqError(toErrorMessage(err, 'Could not save that answer.'));
+    } finally {
+      setSavingFaq(false);
+    }
+  };
+
+  /** Creates a service zone. Backend validates the ZIP format. */
+  const handleCreateZone = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setZoneError(null);
+
+    const zipCodes = Array.from(
+      new Set(
+        newZoneZips
+          .split(/[\s,]+/)
+          .map((z) => z.trim())
+          .filter(Boolean)
+      )
+    );
+
+    if (!newZoneName.trim()) {
+      setZoneError('Give the zone a name.');
+      return;
+    }
+    if (zipCodes.length === 0) {
+      setZoneError('Add at least one ZIP code.');
+      return;
+    }
+    const invalid = zipCodes.filter((z) => !/^\d{5}$/.test(z));
+    if (invalid.length > 0) {
+      setZoneError(`These are not valid 5-digit ZIP codes: ${invalid.join(', ')}`);
+      return;
+    }
+
+    setSavingZone(true);
+    try {
+      await DispatchService.createZone({
+        name: newZoneName.trim(),
+        zipCodes,
+        travelBufferMinutes: Number(newZoneBuffer) || 30,
+      });
+      setNewZoneName('');
+      setNewZoneZips('');
+      setNewZoneBuffer('30');
+      setZoneFormOpen(false);
+      setZones(await DispatchService.getZones());
+      toast.success('Zone created', 'The AI will route matching callers to this territory.');
+    } catch (err) {
+      setZoneError(toErrorMessage(err, 'Could not create the zone.'));
+    } finally {
+      setSavingZone(false);
+    }
+  };
+
+  const handleDeleteZone = async (id: string, name: string) => {
+    setZoneError(null);
+    try {
+      await DispatchService.deleteZone(id);
+      setZones((prev) => prev.filter((z) => z._id !== id));
+      toast.success('Zone removed', `${name} is no longer used for routing.`);
+    } catch (err) {
+      setZoneError(toErrorMessage(err, 'Could not remove the zone.'));
+    }
+  };
+
+  /**
+   * Persists the Google review link.
+   *
+   * This field existed in the UI with only a "Test Link" button and was never
+   * saved, so the review engine had no valid URL to send happy customers to.
+   */
+  const handleSaveReviewUrl = async () => {
+    setSavingReviewUrl(true);
+    try {
+      await BusinessService.savePhoneSetup({ googleReviewUrl: googleReviewUrl.trim() });
+      toast.success(
+        'Review link saved',
+        googleReviewUrl.trim()
+          ? 'Customers who rate you 4 or 5 stars will get this link.'
+          : 'Link cleared — happy customers will just get a thank you.'
+      );
+    } catch (err) {
+      toast.error('Could not save', toErrorMessage(err));
+    } finally {
+      setSavingReviewUrl(false);
     }
   };
 
   // Delete FAQ
   const handleDeleteFAQ = async (id: string) => {
     try {
-      await fetch(`${API_BASE_URL}/api/knowledge/${id}`, {
-        method: 'DELETE',
-        credentials: 'include',
-      });
+      await KnowledgeService.remove(id);
       setFaqs((prev) => prev.filter((f) => f._id !== id));
     } catch (err) {
-      console.error('Failed to delete FAQ:', err);
+      toast.error('Could not delete', toErrorMessage(err));
     }
   };
 
@@ -208,6 +298,72 @@ export default function SettingsPage() {
               Settings saved successfully!
             </Badge>
           )}
+        </div>
+
+        {/* Load failure notice. Previously every fetch here was wrapped in
+            `.catch(() => ({}))`, so an API outage rendered as "nothing is
+            configured" and an operator could overwrite real settings with
+            defaults. */}
+        {loadError && (
+          <div
+            role="alert"
+            className="flex items-start gap-2.5 rounded-2xl border border-amber-200 bg-amber-50 p-3.5 text-xs text-amber-800"
+          >
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+            <div className="flex-1">
+              <p className="font-semibold">{loadError}</p>
+              <button
+                type="button"
+                onClick={fetchSettingsData}
+                className="mt-1 font-semibold underline underline-offset-2"
+              >
+                Retry
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Quick access to the pages these settings actually drive. */}
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <Link href="/app/settings/phone">
+            <div className="group flex cursor-pointer items-center gap-3 rounded-xl border border-slate-200/90 bg-white p-3.5 shadow-xs transition-all hover:border-blue-200 hover:shadow-sm">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-blue-200 bg-blue-50">
+                <PhoneForwarded className="h-5 w-5 text-blue-600" aria-hidden="true" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <span className="text-sm font-bold text-slate-900 transition-colors group-hover:text-blue-600">
+                  Phone line &amp; call forwarding
+                </span>
+                <p className="mt-0.5 text-[11px] text-slate-500">
+                  Connect a number, or forward your existing one to the AI
+                </p>
+              </div>
+              <ChevronRight
+                className="h-4 w-4 text-slate-300 transition-colors group-hover:text-blue-500"
+                aria-hidden="true"
+              />
+            </div>
+          </Link>
+
+          <Link href="/app/reviews">
+            <div className="group flex cursor-pointer items-center gap-3 rounded-xl border border-slate-200/90 bg-white p-3.5 shadow-xs transition-all hover:border-amber-200 hover:shadow-sm">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-amber-200 bg-amber-50">
+                <Star className="h-5 w-5 text-amber-500" aria-hidden="true" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <span className="text-sm font-bold text-slate-900 transition-colors group-hover:text-amber-600">
+                  Reviews &amp; escalations
+                </span>
+                <p className="mt-0.5 text-[11px] text-slate-500">
+                  See ratings and resolve complaints kept off Google
+                </p>
+              </div>
+              <ChevronRight
+                className="h-4 w-4 text-slate-300 transition-colors group-hover:text-amber-500"
+                aria-hidden="true"
+              />
+            </div>
+          </Link>
         </div>
 
         {/* Tab Navigation */}
@@ -385,6 +541,95 @@ export default function SettingsPage() {
                   </Button>
                 </div>
 
+                {/* A failed policy save used to be console.logged only, so the
+                    operator believed their guardrails were live when they were not. */}
+                {policyError && (
+                  <div
+                    role="alert"
+                    className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700"
+                  >
+                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                    <span>{policyError}</span>
+                  </div>
+                )}
+
+                {/*
+                  Legal disclosure. Previously nothing was announced at all: the
+                  assistant answered with a human first name and the call was
+                  transcribed and stored with no notice to the caller.
+                */}
+                <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs space-y-3">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <ShieldCheck className="w-4 h-4 text-emerald-600" aria-hidden="true" />
+                        <h4 className="text-xs font-bold text-slate-900">
+                          Spoken disclosure before the AI answers
+                        </h4>
+                      </div>
+                      <p className="text-xs text-slate-500 mt-1 max-w-2xl">
+                        Tells callers they are speaking with an automated assistant and that the
+                        call is recorded and transcribed. Around a dozen US states require every
+                        party to consent before a call is recorded, and disclosure rules for
+                        synthetic voices are expanding. Keep this on unless your lawyer says
+                        otherwise.
+                      </p>
+                    </div>
+                    <label className="flex shrink-0 cursor-pointer items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={policies.aiDisclosureEnabled !== false}
+                        onChange={(e) =>
+                          setPolicies((p) => ({ ...p, aiDisclosureEnabled: e.target.checked }))
+                        }
+                        className="h-4 w-4 cursor-pointer accent-emerald-600"
+                      />
+                      <span className="text-xs font-semibold text-slate-700">
+                        {policies.aiDisclosureEnabled !== false ? 'On' : 'Off'}
+                      </span>
+                    </label>
+                  </div>
+
+                  {policies.aiDisclosureEnabled === false && (
+                    <div
+                      role="alert"
+                      className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900"
+                    >
+                      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                      <span>
+                        Callers will hear no notice that they are talking to an AI or that the call
+                        is recorded. In all-party consent states this can make the recording
+                        unlawful.
+                      </span>
+                    </div>
+                  )}
+
+                  <div>
+                    <label
+                      htmlFor="ai-disclosure-text"
+                      className="mb-1.5 block text-[11px] font-bold text-slate-700"
+                    >
+                      Custom wording <span className="font-normal text-slate-400">(optional)</span>
+                    </label>
+                    <Input
+                      id="ai-disclosure-text"
+                      type="text"
+                      maxLength={400}
+                      value={policies.aiDisclosureText || ''}
+                      onChange={(e) =>
+                        setPolicies((p) => ({ ...p, aiDisclosureText: e.target.value }))
+                      }
+                      placeholder="Leave blank to use the standard notice"
+                      disabled={policies.aiDisclosureEnabled === false}
+                      className="text-xs bg-white border-slate-200 text-slate-900 rounded-xl"
+                    />
+                    <p className="mt-1 text-[10px] text-slate-400">
+                      Spoken by the phone system before the assistant connects, so it cannot be
+                      interrupted or skipped.
+                    </p>
+                  </div>
+                </div>
+
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   {/* Advance Notice Slider */}
                   <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs space-y-4">
@@ -394,7 +639,7 @@ export default function SettingsPage() {
                         <h4 className="text-xs font-bold text-slate-900">Minimum Advance Notice</h4>
                       </div>
                       <span className="text-sm font-bold text-blue-600">
-                        {policies.minAdvanceNoticeHours} Hours
+                        {policies.minBookingNoticeHours} Hours
                       </span>
                     </div>
                     <p className="text-xs text-slate-500">
@@ -405,9 +650,9 @@ export default function SettingsPage() {
                       min={1}
                       max={12}
                       step={1}
-                      value={policies.minAdvanceNoticeHours}
+                      value={policies.minBookingNoticeHours}
                       onChange={(e) =>
-                        setPolicies((p) => ({ ...p, minAdvanceNoticeHours: Number(e.target.value) }))
+                        setPolicies((p) => ({ ...p, minBookingNoticeHours: Number(e.target.value) }))
                       }
                       className="w-full accent-blue-600 cursor-pointer"
                     />
@@ -512,59 +757,173 @@ export default function SettingsPage() {
               </div>
             )}
 
-            {/* Tab 3: Service Zones & Tech Routing */}
+            {/* Tab 3: Service Zones & Tech Routing — now full CRUD. This tab was
+                previously read-only even though the backend already supported
+                creating zones. */}
             {activeTab === 'zones' && (
               <div className="space-y-6">
-                <div>
-                  <h3 className="text-sm font-bold text-slate-900">
-                    Geographic Service Zones & Territory Clustering (M23)
-                  </h3>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Clustering zip codes minimizes technician drive-time by matching calls to certified local specialists.
-                  </p>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900">Service zones</h3>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Group ZIP codes into territories so the AI offers slots from a technician who
+                      is already nearby.
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => setZoneFormOpen((v) => !v)}
+                    className="shrink-0 bg-blue-600 text-xs text-white hover:bg-blue-500"
+                  >
+                    <Plus className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
+                    Add zone
+                  </Button>
                 </div>
 
+                {zoneError && (
+                  <div
+                    role="alert"
+                    className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700"
+                  >
+                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                    <span>{zoneError}</span>
+                  </div>
+                )}
+
+                {zoneFormOpen && (
+                  <form
+                    onSubmit={handleCreateZone}
+                    className="space-y-3 rounded-2xl border border-blue-200 bg-blue-50/50 p-4"
+                    noValidate
+                  >
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <div>
+                        <label
+                          htmlFor="zone-name"
+                          className="mb-1 block text-xs font-semibold text-slate-700"
+                        >
+                          Zone name
+                        </label>
+                        <Input
+                          id="zone-name"
+                          value={newZoneName}
+                          onChange={(e) => setNewZoneName(e.target.value)}
+                          placeholder="North Dallas"
+                          className="text-xs"
+                        />
+                      </div>
+                      <div>
+                        <label
+                          htmlFor="zone-buffer"
+                          className="mb-1 block text-xs font-semibold text-slate-700"
+                        >
+                          Drive-time buffer (minutes)
+                        </label>
+                        <Input
+                          id="zone-buffer"
+                          type="number"
+                          min={0}
+                          max={240}
+                          value={newZoneBuffer}
+                          onChange={(e) => setNewZoneBuffer(e.target.value)}
+                          className="text-xs"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label
+                        htmlFor="zone-zips"
+                        className="mb-1 block text-xs font-semibold text-slate-700"
+                      >
+                        ZIP codes
+                      </label>
+                      <Input
+                        id="zone-zips"
+                        value={newZoneZips}
+                        onChange={(e) => setNewZoneZips(e.target.value)}
+                        placeholder="75001, 75002, 75006"
+                        className="font-mono text-xs"
+                      />
+                      <p className="mt-1 text-[11px] text-slate-500">
+                        Separate with commas or spaces. Five digits each.
+                      </p>
+                    </div>
+
+                    <div className="flex justify-end gap-2">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setZoneFormOpen(false)}
+                        className="text-xs"
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        type="submit"
+                        size="sm"
+                        disabled={savingZone}
+                        className="bg-blue-600 text-xs text-white hover:bg-blue-500"
+                      >
+                        {savingZone && (
+                          <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                        )}
+                        Create zone
+                      </Button>
+                    </div>
+                  </form>
+                )}
+
                 {zones.length === 0 ? (
-                  <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center text-slate-400 space-y-2">
-                    <MapPin className="w-10 h-10 mx-auto text-slate-300" />
-                    <h4 className="text-sm font-semibold text-slate-700">No custom service zones defined</h4>
-                    <p className="text-xs text-slate-400 max-w-sm mx-auto">
-                      All zip codes are currently served by the primary dispatch pool.
+                  <div className="space-y-2 rounded-2xl border border-slate-200 bg-white p-12 text-center text-slate-400">
+                    <MapPin className="mx-auto h-10 w-10 text-slate-300" aria-hidden="true" />
+                    <h4 className="text-sm font-semibold text-slate-700">No service zones yet</h4>
+                    <p className="mx-auto max-w-sm text-xs text-slate-400">
+                      Without zones, every technician is considered equally available for every ZIP
+                      code.
                     </p>
                   </div>
                 ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                     {zones.map((zone) => (
                       <div
                         key={zone._id}
-                        className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs space-y-3"
+                        className="space-y-3 rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs"
                       >
-                        <div className="flex items-center justify-between">
+                        <div className="flex items-start justify-between gap-2">
                           <h4 className="text-sm font-bold text-slate-900">{zone.name}</h4>
-                          <Badge className="bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px]">
-                            {zone.travelBufferMinutes || 30} min buffer
-                          </Badge>
+                          <div className="flex shrink-0 items-center gap-1.5">
+                            <Badge className="border-slate-200 bg-slate-50 text-[10px] text-slate-600">
+                              {zone.travelBufferMinutes ?? 30} min buffer
+                            </Badge>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteZone(zone._id, zone.name)}
+                              aria-label={`Remove ${zone.name}`}
+                              className="rounded-lg p-1 text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-600"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                            </button>
+                          </div>
                         </div>
 
                         <div>
-                          <span className="text-[11px] text-slate-400 font-medium block mb-1.5">
-                            Covered Zip Codes ({zone.zipCodes?.length || 0})
+                          <span className="mb-1.5 block text-[11px] font-medium text-slate-400">
+                            {zone.zipCodes?.length ?? 0} ZIP code
+                            {(zone.zipCodes?.length ?? 0) === 1 ? '' : 's'}
                           </span>
                           <div className="flex flex-wrap gap-1.5">
                             {(zone.zipCodes || []).map((zip: string) => (
                               <span
                                 key={zip}
-                                className="px-2 py-0.5 bg-slate-100 text-slate-700 rounded-md font-mono text-xs"
+                                className="rounded-md bg-slate-100 px-2 py-0.5 font-mono text-xs text-slate-700"
                               >
                                 {zip}
                               </span>
                             ))}
                           </div>
-                        </div>
-
-                        <div className="pt-2 border-t border-slate-100 text-xs text-slate-500 flex items-center justify-between">
-                          <span>Status: Active Territory</span>
-                          <span className="text-blue-600 font-medium">Auto-Route Enabled</span>
                         </div>
                       </div>
                     ))}
@@ -585,75 +944,98 @@ export default function SettingsPage() {
                   </p>
                 </div>
 
-                {/* Live Reputation KPIs */}
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-2xs">
-                    <span className="text-[10px] text-slate-400 uppercase font-semibold block">
-                      Surveys Sent
-                    </span>
-                    <span className="text-xl font-bold text-slate-900 mt-0.5 block">
-                      {reputationStats?.totalSurveysSent ?? 0}
-                    </span>
-                    <span className="text-[11px] text-slate-400">Post-service SMS</span>
-                  </div>
-
-                  <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-2xs">
-                    <span className="text-[10px] text-slate-400 uppercase font-semibold block">
-                      Average CSAT Rating
-                    </span>
-                    <span className="text-xl font-bold text-amber-500 mt-0.5 block flex items-center gap-1">
-                      {reputationStats?.averageRating ?? 5.0} <Star className="w-4 h-4 fill-amber-500" />
-                    </span>
-                    <span className="text-[11px] text-slate-400">{reputationStats?.totalResponses ?? 0} Responses</span>
-                  </div>
-
-                  <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-2xs">
-                    <span className="text-[10px] text-slate-400 uppercase font-semibold block">
-                      5-Star Google Redirects
-                    </span>
-                    <span className="text-xl font-bold text-emerald-600 mt-0.5 block">
-                      {reputationStats?.positiveRedirectedCount ?? 0}
-                    </span>
-                    <span className="text-[11px] text-emerald-600">Public 5-Star Reviews</span>
-                  </div>
-
-                  <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-2xs">
-                    <span className="text-[10px] text-slate-400 uppercase font-semibold block">
-                      Negative Reviews Shielded
-                    </span>
-                    <span className="text-xl font-bold text-rose-600 mt-0.5 block">
-                      {reputationStats?.negativeShieldedCount ?? 0}
-                    </span>
-                    <span className="text-[11px] text-rose-600">Saved from Google</span>
-                  </div>
-                </div>
-
-                {/* Google Review URL Config */}
-                <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs space-y-4">
+                {/* Google Review URL config.
+                    This field previously had only a "Test Link" button and was
+                    never persisted, so the review engine had no valid URL and
+                    happy customers received no Google link at all. */}
+                <div className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs">
                   <div>
-                    <h4 className="text-xs font-bold text-slate-900">Google Business Review Link</h4>
-                    <p className="text-xs text-slate-500 mt-0.5">
-                      Provided only to customers rating their technician 4 or 5 stars.
+                    <label
+                      htmlFor="google-review-url"
+                      className="text-xs font-bold text-slate-900"
+                    >
+                      Google review link
+                    </label>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      Sent only to customers who rate their technician 4 or 5 stars. Leave blank and
+                      they simply get a thank you instead of a broken link.
                     </p>
                   </div>
-                  <div className="flex gap-2">
+
+                  <div className="flex flex-col gap-2 sm:flex-row">
                     <Input
-                      type="text"
+                      id="google-review-url"
+                      type="url"
+                      inputMode="url"
+                      placeholder="https://g.page/r/.../review"
                       value={googleReviewUrl}
                       onChange={(e) => setGoogleReviewUrl(e.target.value)}
-                      className="text-xs font-mono"
+                      className="font-mono text-xs"
                     />
-                    <Button
-                      size="sm"
-                      onClick={() => window.open(googleReviewUrl, '_blank')}
-                      variant="outline"
-                      className="text-xs shrink-0"
-                    >
-                      <ExternalLink className="w-3.5 h-3.5 mr-1" />
-                      Test Link
-                    </Button>
+                    <div className="flex shrink-0 gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={handleSaveReviewUrl}
+                        disabled={savingReviewUrl}
+                        className="bg-blue-600 text-xs text-white hover:bg-blue-500"
+                      >
+                        {savingReviewUrl ? (
+                          <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                        ) : (
+                          <Save className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
+                        )}
+                        Save
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={!googleReviewUrl.trim()}
+                        onClick={() =>
+                          window.open(googleReviewUrl.trim(), '_blank', 'noopener,noreferrer')
+                        }
+                        className="text-xs"
+                      >
+                        <ExternalLink className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
+                        Test
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <p className="text-[11px] leading-relaxed text-slate-600">
+                      <span className="font-semibold text-slate-800">Where to find this:</span> open
+                      your Google Business Profile, choose <em>Ask for reviews</em>, and copy the
+                      short link it gives you. A link built from your business name will not work —
+                      it needs your real Place ID.
+                    </p>
                   </div>
                 </div>
+
+                {/* Ratings and escalations live on their own page; duplicating the
+                    KPI tiles here meant two places to maintain and two numbers to
+                    disagree. */}
+                <Link
+                  href="/app/reviews"
+                  className="group flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-2xs transition-all hover:border-amber-200 hover:shadow-sm"
+                >
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-amber-200 bg-amber-50">
+                    <Star className="h-5 w-5 text-amber-500" aria-hidden="true" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <span className="text-sm font-bold text-slate-900 transition-colors group-hover:text-amber-600">
+                      View ratings and escalations
+                    </span>
+                    <p className="mt-0.5 text-[11px] text-slate-500">
+                      Response rates, average rating, and complaints waiting on a call back
+                    </p>
+                  </div>
+                  <ChevronRight
+                    className="h-4 w-4 text-slate-300 transition-colors group-hover:text-amber-500"
+                    aria-hidden="true"
+                  />
+                </Link>
               </div>
             )}
           </>
@@ -664,6 +1046,17 @@ export default function SettingsPage() {
           <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
             <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4">
               <h3 className="text-sm font-bold text-slate-900">Add Company Knowledge Base Item</h3>
+
+              {faqError && (
+                <div
+                  role="alert"
+                  className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700"
+                >
+                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                  <span>{faqError}</span>
+                </div>
+              )}
+
               <form onSubmit={handleCreateFAQ} className="space-y-4">
                 <div>
                   <label className="text-xs font-medium text-slate-700 block mb-1">Category</label>
@@ -713,7 +1106,15 @@ export default function SettingsPage() {
                   >
                     Cancel
                   </Button>
-                  <Button type="submit" size="sm" className="bg-blue-600 hover:bg-blue-500 text-white text-xs">
+                  <Button
+                    type="submit"
+                    size="sm"
+                    disabled={savingFaq}
+                    className="bg-blue-600 hover:bg-blue-500 text-white text-xs"
+                  >
+                    {savingFaq && (
+                      <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                    )}
                     Add Knowledge Item
                   </Button>
                 </div>

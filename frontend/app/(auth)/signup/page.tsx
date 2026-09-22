@@ -1,16 +1,35 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/context/auth-context';
+import { savePlanIntent, readPlanIntent } from '@/lib/plan-intent';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card';
 import { AlertCircle, Lock, Mail, User as UserIcon, ArrowRight, ShieldCheck } from 'lucide-react';
 
+const PLAN_LABELS: Record<string, string> = {
+  starter: 'Starter',
+  pro: 'Pro Fleet',
+  enterprise: 'Enterprise',
+};
+
 export default function SignupPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { signup, isAuthenticated, isLoading: isAuthLoading } = useAuth();
+
+  // A plan chosen on the marketing site arrives as ?plan=&interval=. Persist it
+  // so it survives signup and onboarding and can become a checkout session.
+  const planParam = searchParams.get('plan');
+  const intervalParam = searchParams.get('interval');
+
+  useEffect(() => {
+    if (planParam) savePlanIntent(planParam, intervalParam ?? 'month');
+  }, [planParam, intervalParam]);
+
+  const selectedPlan = planParam ?? readPlanIntent()?.tier ?? null;
 
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -81,7 +100,9 @@ export default function SignupPage() {
         email: email.trim(),
         password,
       });
-      router.push('/app');
+      // A brand-new account has no business yet, so go straight to onboarding
+      // instead of bouncing off /app's redirect after a flash of the shell.
+      router.push('/onboarding');
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Registration failed. Please try again.';
       setErrorMessage(message);
@@ -110,7 +131,9 @@ export default function SignupPage() {
               Create your account
             </CardTitle>
             <CardDescription className="text-sm text-slate-500">
-              Start building your AI-powered service business workspace.
+              {selectedPlan
+                ? `Your ${PLAN_LABELS[selectedPlan] ?? selectedPlan} trial starts as soon as your account is ready. No card needed today.`
+                : 'Start your free trial. No credit card required.'}
             </CardDescription>
           </CardHeader>
 

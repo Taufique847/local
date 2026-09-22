@@ -7,11 +7,9 @@ import {
   PaginatedAppointmentsResponse,
   AvailableSlotsResponse,
 } from '../types/appointment';
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
+import { apiClient } from '../lib/api-client';
 
 export class AppointmentService {
-  // Get appointments with filters
   public static async getAppointments(
     params?: AppointmentQuery
   ): Promise<PaginatedAppointmentsResponse> {
@@ -26,158 +24,85 @@ export class AppointmentService {
     if (params?.customerId) searchParams.set('customerId', params.customerId);
     if (params?.serviceId) searchParams.set('serviceId', params.serviceId);
 
-    const res = await fetch(`${API_BASE_URL}/api/appointments?${searchParams.toString()}`, {
-      method: 'GET',
-      headers: { Accept: 'application/json' },
-      credentials: 'include',
-      cache: 'no-store',
-    });
-
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.message || 'Failed to fetch appointments');
-    return json;
+    return apiClient.get<PaginatedAppointmentsResponse>(
+      `/api/appointments?${searchParams.toString()}`
+    );
   }
 
-  // Get today's appointments
+  /** Feeds the dashboard's today strip, so it degrades to empty rather than erroring. */
   public static async getTodayAppointments(): Promise<Appointment[]> {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/appointments/today`, {
-        method: 'GET',
-        headers: { Accept: 'application/json' },
-        credentials: 'include',
-        cache: 'no-store',
-      });
-
-      if (!res.ok) return [];
-      const json = await res.json();
+      const json = await apiClient.get<{ appointments?: Appointment[] }>(
+        '/api/appointments/today'
+      );
       return json.appointments || [];
     } catch {
       return [];
     }
   }
 
-  // Get single appointment
   public static async getAppointmentById(id: string): Promise<Appointment> {
-    const res = await fetch(`${API_BASE_URL}/api/appointments/${id}`, {
-      method: 'GET',
-      headers: { Accept: 'application/json' },
-      credentials: 'include',
-      cache: 'no-store',
-    });
-
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.message || 'Failed to fetch appointment');
+    const json = await apiClient.get<{ appointment: Appointment }>(`/api/appointments/${id}`);
     return json.appointment;
   }
 
-  // Create appointment
+  /**
+   * Books an appointment.
+   *
+   * A 409 here means the slot was taken between the caller reading availability
+   * and submitting, or that another booking for this business is mid-flight. Both
+   * are worth surfacing verbatim rather than as a generic failure.
+   */
   public static async createAppointment(data: CreateAppointmentInput): Promise<Appointment> {
-    const res = await fetch(`${API_BASE_URL}/api/appointments`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-      },
-      credentials: 'include',
-      body: JSON.stringify(data),
-    });
-
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.message || 'Failed to create appointment');
+    const json = await apiClient.post<{ appointment: Appointment }>('/api/appointments', data);
     return json.appointment;
   }
 
-  // Update appointment
   public static async updateAppointment(
     id: string,
     data: UpdateAppointmentInput
   ): Promise<Appointment> {
-    const res = await fetch(`${API_BASE_URL}/api/appointments/${id}`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-      },
-      credentials: 'include',
-      body: JSON.stringify(data),
-    });
-
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.message || 'Failed to update appointment');
+    const json = await apiClient.put<{ appointment: Appointment }>(
+      `/api/appointments/${id}`,
+      data
+    );
     return json.appointment;
   }
 
-  // Update appointment status
   public static async updateStatus(
     id: string,
     status: AppointmentStatus,
     cancellationReason?: string
   ): Promise<Appointment> {
-    const res = await fetch(`${API_BASE_URL}/api/appointments/${id}/status`, {
-      method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-      },
-      credentials: 'include',
-      body: JSON.stringify({ status, cancellationReason }),
-    });
-
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.message || 'Failed to update status');
+    const json = await apiClient.patch<{ appointment: Appointment }>(
+      `/api/appointments/${id}/status`,
+      { status, cancellationReason }
+    );
     return json.appointment;
   }
 
-  // Delete appointment
   public static async deleteAppointment(id: string): Promise<void> {
-    const res = await fetch(`${API_BASE_URL}/api/appointments/${id}`, {
-      method: 'DELETE',
-      headers: { Accept: 'application/json' },
-      credentials: 'include',
-    });
-
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.message || 'Failed to delete appointment');
+    await apiClient.delete<{ success: boolean }>(`/api/appointments/${id}`);
   }
 
-  // Get available slots for date & service
   public static async getAvailableSlots(
     serviceId: string,
     date: string
   ): Promise<AvailableSlotsResponse> {
-    const res = await fetch(
-      `${API_BASE_URL}/api/availability/slots?serviceId=${serviceId}&date=${date}`,
-      {
-        method: 'GET',
-        headers: { Accept: 'application/json' },
-        credentials: 'include',
-        cache: 'no-store',
-      }
+    return apiClient.get<AvailableSlotsResponse>(
+      `/api/availability/slots?serviceId=${encodeURIComponent(serviceId)}&date=${encodeURIComponent(date)}`
     );
-
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.message || 'Failed to fetch available slots');
-    return json;
   }
 
-  // Check conflict
   public static async checkConflict(
     startAt: string,
     endAt: string,
     excludeAppointmentId?: string
   ): Promise<boolean> {
-    const res = await fetch(`${API_BASE_URL}/api/availability/check-conflict`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-      },
-      credentials: 'include',
-      body: JSON.stringify({ startAt, endAt, excludeAppointmentId }),
-    });
-
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.message || 'Failed to check conflict');
+    const json = await apiClient.post<{ hasConflict: boolean }>(
+      '/api/availability/check-conflict',
+      { startAt, endAt, excludeAppointmentId }
+    );
     return json.hasConflict;
   }
 }

@@ -1,6 +1,7 @@
 import { Types } from 'mongoose';
 import { Lead } from '../models/lead.model';
 import { Customer } from '../models/customer.model';
+import { AppError } from '../types';
 import { 
   ILead, 
   CreateLeadInput, 
@@ -44,7 +45,7 @@ export class LeadService {
     input: CreateLeadInput
   ): Promise<ILead> {
     if (!Types.ObjectId.isValid(input.customerId)) {
-      throw new Error('Invalid customer ID format');
+      throw new AppError('That customer id is not valid.', 400);
     }
 
     // Verify customer belongs to business
@@ -54,7 +55,7 @@ export class LeadService {
     });
 
     if (!customer) {
-      throw new Error('Customer does not exist or does not belong to your business');
+      throw new AppError('Customer not found for this business', 404);
     }
 
     const initialActivity: ILeadActivity = {
@@ -288,16 +289,21 @@ export class LeadService {
     actor: string = 'user'
   ): Promise<ILead> {
     if (!Types.ObjectId.isValid(leadId)) {
-      throw new Error('Invalid lead ID');
+      throw new AppError('That lead id is not valid.', 400);
     }
 
     const lead = await Lead.findOne({ _id: leadId, businessId });
     if (!lead) {
-      throw new Error('Lead not found');
+      throw new AppError('Lead not found', 404);
     }
 
     if (!this.isValidTransition(lead.status, status)) {
-      throw new Error(`Invalid status transition from "${lead.status}" to "${status}".`);
+      // 409: the request is well formed, it just conflicts with the lead's
+      // current state. Previously a 500.
+      throw new AppError(
+        `A lead cannot move from "${lead.status}" to "${status}".`,
+        409
+      );
     }
 
     const previousStatus = lead.status;
@@ -326,12 +332,12 @@ export class LeadService {
     }
   ): Promise<ILead> {
     if (!Types.ObjectId.isValid(leadId)) {
-      throw new Error('Invalid lead ID');
+      throw new AppError('That lead id is not valid.', 400);
     }
 
     const lead = await Lead.findOne({ _id: leadId, businessId });
     if (!lead) {
-      throw new Error('Lead not found');
+      throw new AppError('Lead not found', 404);
     }
 
     lead.activities.push({
@@ -358,7 +364,7 @@ export class LeadService {
     }
   ): Promise<ILead> {
     const lead = await Lead.findOne({ _id: leadId, businessId });
-    if (!lead) throw new Error('Lead not found');
+    if (!lead) throw new AppError('Lead not found', 404);
 
     lead.status = 'qualified';
     lead.serviceType = qualification.serviceType;
@@ -392,7 +398,7 @@ export class LeadService {
     appointmentId: string
   ): Promise<ILead> {
     const lead = await Lead.findOne({ _id: leadId, businessId });
-    if (!lead) throw new Error('Lead not found');
+    if (!lead) throw new AppError('Lead not found', 404);
 
     lead.appointmentId = new Types.ObjectId(appointmentId);
     lead.status = 'appointment_booked';

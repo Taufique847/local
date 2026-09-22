@@ -1,8 +1,11 @@
 import mongoose, { Document, Schema, Types } from 'mongoose';
 
 export type SubscriptionTier = 'starter' | 'pro' | 'enterprise';
-export type SubscriptionStatus = 'active' | 'past_due' | 'canceled' | 'incomplete';
+export type SubscriptionStatus = 'trialing' | 'active' | 'past_due' | 'canceled' | 'incomplete';
 export type BillingInterval = 'month' | 'year';
+
+/** Statuses that permit the AI receptionist to answer calls. */
+export const ENTITLED_STATUSES: SubscriptionStatus[] = ['trialing', 'active'];
 
 export interface IInvoiceRecord {
   invoiceId: string;
@@ -28,6 +31,10 @@ export interface ISubscription extends Document {
   minutesAllocated: number;
   minutesUsed: number;
   phoneNumbersAllocated: number;
+  /** When minutesUsed was last rolled over to a fresh billing period. */
+  usageResetAt: Date;
+  /** End of the free trial. Null once the business has paid. */
+  trialEndsAt?: Date;
   invoicesHistory: IInvoiceRecord[];
   createdAt: Date;
   updatedAt: Date;
@@ -74,9 +81,11 @@ const SubscriptionSchema = new Schema<ISubscription>(
     },
     status: {
       type: String,
-      enum: ['active', 'past_due', 'canceled', 'incomplete'],
-      default: 'active',
+      enum: ['trialing', 'active', 'past_due', 'canceled', 'incomplete'],
+      // New businesses start on a trial, not a fabricated paid subscription.
+      default: 'trialing',
       required: true,
+      index: true,
     },
     billingInterval: {
       type: String,
@@ -112,6 +121,14 @@ const SubscriptionSchema = new Schema<ISubscription>(
     phoneNumbersAllocated: {
       type: Number,
       default: 1,
+    },
+    usageResetAt: {
+      type: Date,
+      default: Date.now,
+    },
+    trialEndsAt: {
+      type: Date,
+      index: true,
     },
     invoicesHistory: {
       type: [InvoiceRecordSchema],

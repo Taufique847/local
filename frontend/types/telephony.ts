@@ -76,6 +76,8 @@ export interface CallLog {
   recordingUrl?: string;
   outcome?: string;
   aiHandled?: boolean;
+  /** Owner-initiated test call. Excluded from stats and the call history list. */
+  isTest?: boolean;
   transcript?: Array<{ role: 'assistant' | 'user' | 'system'; text: string; timestamp: string }>;
   toolExecutions?: Array<{ toolName: string; arguments: any; result: any; durationMs: number; timestamp: string }>;
   createdAt: string;
@@ -145,4 +147,29 @@ export interface TwilioConnectionStatus {
   accountName?: string;
   status?: string;
   message: string;
+}
+
+/**
+ * Whether the business can place a real test call right now.
+ *
+ * `blockers` is written for the contractor, not the developer: each entry names
+ * the specific thing to fix. An empty list means `ready` is true.
+ */
+export interface TestCallReadiness {
+  ready: boolean;
+  blockers: string[];
+  telephonyConfigured: boolean;
+  voiceProvider: string;
+  voiceEngineReady: boolean;
+  aiPhoneNumber: string | null;
+  /** The number the assistant will dial. Chosen server side. */
+  destinationPhone: string | null;
+  callsRemainingThisHour: number;
+}
+
+export interface StartedTestCall {
+  callId: string;
+  callSid: string;
+  to: string;
+  from: string;
 }

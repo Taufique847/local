@@ -23,6 +23,28 @@ export class TechnicianDispatchService {
     });
   }
 
+  /**
+   * Soft-deactivates a zone.
+   *
+   * Deactivating rather than deleting keeps historical dispatch decisions
+   * explainable — appointments already routed through this zone still resolve.
+   * Always scoped by businessId so one tenant cannot remove another's zone.
+   */
+  public static async deactivateZone(
+    businessId: Types.ObjectId | string,
+    zoneId: string
+  ): Promise<boolean> {
+    if (!Types.ObjectId.isValid(zoneId)) return false;
+
+    const result = await ServiceZone.findOneAndUpdate(
+      { _id: zoneId, businessId: new Types.ObjectId(businessId.toString()) },
+      { active: false },
+      { new: true }
+    );
+
+    return Boolean(result);
+  }
+
   public static async getZones(businessId: Types.ObjectId | string): Promise<IServiceZone[]> {
     return ServiceZone.find({
       businessId: new Types.ObjectId(businessId.toString()),

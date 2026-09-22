@@ -1,0 +1,17 @@
+node_modules
+dist
+coverage
+*.tsbuildinfo
+
+# Never bake secrets into an image layer.
+.env
+.env.*
+!.env.example
+cookies.txt
+
+npm-debug.log*
+*.log
+.git
+.gitignore
+Dockerfile
+.dockerignore

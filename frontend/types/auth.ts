@@ -5,6 +5,8 @@ export interface User {
   name: string;
   email: string;
   role: UserRole;
+  /** False until the user has clicked the link in their verification email. */
+  emailVerified?: boolean;
   createdAt?: string;
 }
 

@@ -1,4 +1,4 @@
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
+import { apiClient } from '../lib/api-client';
 
 export interface PlanItem {
   id: 'starter' | 'pro' | 'enterprise';
@@ -22,9 +22,16 @@ export interface InvoiceItem {
   status: 'paid' | 'open' | 'failed';
 }
 
+export type SubscriptionStatus =
+  | 'trialing'
+  | 'active'
+  | 'past_due'
+  | 'canceled'
+  | 'incomplete';
+
 export interface SubscriptionData {
   tier: 'starter' | 'pro' | 'enterprise';
-  status: 'active' | 'past_due' | 'canceled' | 'incomplete';
+  status: SubscriptionStatus;
   billingInterval: 'month' | 'year';
   amountUsd: number;
   currentPeriodStart: string;
@@ -34,30 +41,22 @@ export interface SubscriptionData {
   minutesUsed: number;
   phoneNumbersAllocated: number;
   stripeCustomerId: string;
+  /** Set while the business is on its free trial. */
+  trialEndsAt?: string;
+  usageResetAt?: string;
   invoicesHistory: InvoiceItem[];
 }
 
 export class BillingService {
   public static async getPlans(): Promise<PlanItem[]> {
-    const res = await fetch(`${API_BASE_URL}/api/billing/plans`, {
-      method: 'GET',
-      headers: { Accept: 'application/json' },
-      cache: 'no-store',
-    });
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.message || 'Failed to fetch plans');
+    const json = await apiClient.get<{ plans?: PlanItem[] }>('/api/billing/plans');
     return json.plans || [];
   }
 
   public static async getSubscription(): Promise<SubscriptionData> {
-    const res = await fetch(`${API_BASE_URL}/api/billing/subscription`, {
-      method: 'GET',
-      headers: { Accept: 'application/json' },
-      credentials: 'include',
-      cache: 'no-store',
-    });
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.message || 'Failed to fetch subscription');
+    const json = await apiClient.get<{ subscription: SubscriptionData }>(
+      '/api/billing/subscription'
+    );
     return json.subscription;
   }
 
@@ -65,32 +64,13 @@ export class BillingService {
     tier: 'starter' | 'pro' | 'enterprise',
     interval: 'month' | 'year' = 'month'
   ): Promise<{ checkoutUrl: string; sessionId: string }> {
-    const res = await fetch(`${API_BASE_URL}/api/billing/checkout`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-      },
-      credentials: 'include',
-      body: JSON.stringify({ tier, interval }),
+    return apiClient.post<{ checkoutUrl: string; sessionId: string }>('/api/billing/checkout', {
+      tier,
+      interval,
     });
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.message || 'Failed to create checkout session');
-    return json;
   }
 
   public static async createPortal(): Promise<{ portalUrl: string }> {
-    const res = await fetch(`${API_BASE_URL}/api/billing/portal`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-      },
-      credentials: 'include',
-      body: JSON.stringify({}),
-    });
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.message || 'Failed to create customer portal');
-    return json;
+    return apiClient.post<{ portalUrl: string }>('/api/billing/portal', {});
   }
 }

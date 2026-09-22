@@ -91,14 +91,22 @@ export class BillingController {
     }
   }
 
-  // POST /api/billing/webhook
+  /**
+   * POST /api/billing/webhook
+   *
+   * Public endpoint. `req.body` here is a raw Buffer (see STRIPE_WEBHOOK_PATH in
+   * app.ts) because Stripe signatures are computed over the exact bytes sent.
+   * The payload is untrusted until constructWebhookEvent verifies it.
+   */
   public static async handleWebhook(
     req: any,
     res: Response,
     next: NextFunction
   ): Promise<void> {
     try {
-      const result = await BillingService.handleWebhookEvent(req.body);
+      const signature = req.headers['stripe-signature'] as string | undefined;
+      const event = BillingService.constructWebhookEvent(req.body, signature);
+      const result = await BillingService.handleWebhookEvent(event);
       sendSuccess(res, { success: true, ...result }, 200);
     } catch (error) {
       next(error);

@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Sidebar } from './sidebar';
 import { Header } from './header';
 import { BusinessService } from '@/services/business.service';
+import { BillingService, SubscriptionData } from '@/services/billing.service';
 import { Business } from '@/types/business';
 import { ProtectedRoute } from '@/components/auth/protected-route';
 
@@ -18,36 +19,39 @@ export function DashboardShell({ children, title, subtitle }: DashboardShellProp
   const router = useRouter();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [business, setBusiness] = useState<Business | null>(null);
-  const [isLoadingBusiness, setIsLoadingBusiness] = useState(true);
+  const [subscription, setSubscription] = useState<SubscriptionData | null>(null);
 
   useEffect(() => {
     let isMounted = true;
 
-    async function loadBusiness() {
+    async function loadShellData() {
       try {
         const res = await BusinessService.getMyBusiness();
-        if (isMounted) {
-          if (res) {
-            setBusiness(res);
-            // If onboarding is not completed, redirect to onboarding
-            if (res.onboardingStatus !== 'completed') {
-              router.push('/onboarding');
-            }
-          } else {
-            // No business created yet -> redirect to onboarding wizard
-            router.push('/onboarding');
-          }
+        if (!isMounted) return;
+
+        if (!res) {
+          router.replace('/onboarding');
+          return;
         }
+
+        setBusiness(res);
+        if (res.onboardingStatus !== 'completed') {
+          router.replace('/onboarding');
+          return;
+        }
+
+        // Subscription drives the real plan badge in the sidebar, which was
+        // previously hardcoded to "Pro Fleet" / "Stripe Active" for every user.
+        const sub = await BillingService.getSubscription().catch(() => null);
+        if (isMounted) setSubscription(sub);
       } catch (err) {
-        console.error('Failed to load business profile:', err);
-      } finally {
-        if (isMounted) {
-          setIsLoadingBusiness(false);
-        }
+        // Navigation failures here are non-fatal: ProtectedRoute handles the
+        // unauthenticated case, and pages render their own error states.
+        console.error('Failed to load workspace profile:', err);
       }
     }
 
-    loadBusiness();
+    loadShellData();
 
     return () => {
       isMounted = false;
@@ -58,24 +62,23 @@ export function DashboardShell({ children, title, subtitle }: DashboardShellProp
     <ProtectedRoute>
       <div className="min-h-screen bg-slate-50 flex text-slate-900 font-sans antialiased">
         {/* Persistent Desktop Sidebar & Mobile Drawer */}
-        <Sidebar 
+        <Sidebar
           business={business}
-          mobileOpen={mobileOpen} 
-          onCloseMobile={() => setMobileOpen(false)} 
+          subscription={subscription}
+          mobileOpen={mobileOpen}
+          onCloseMobile={() => setMobileOpen(false)}
         />
 
-        {/* Main Content Area (no extra pl-64 since sidebar is in flex flow) */}
         <div className="flex-1 flex flex-col min-w-0">
           <Header
             business={business}
+            subscription={subscription}
             onOpenMobileMenu={() => setMobileOpen(true)}
             title={title}
             subtitle={subtitle}
           />
 
-          <main className="flex-1 p-4 sm:p-6 lg:p-8 w-full max-w-7xl mx-auto">
-            {children}
-          </main>
+          <main className="flex-1 p-4 sm:p-6 lg:p-8 w-full max-w-7xl mx-auto">{children}</main>
         </div>
       </div>
     </ProtectedRoute>

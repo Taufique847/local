@@ -11,23 +11,62 @@ import {
   Calendar,
   Wrench,
   Clock,
-  Settings,
   BookOpen,
   CreditCard,
-  Bot,
-  Sparkles,
-  ShieldCheck,
-  ChevronRight,
-  LogOut,
   X,
+  Smartphone,
+  Receipt,
+  FileCheck2,
+  Building2,
+  Zap,
+  Star,
+  MessageSquare,
+  PhoneForwarded,
 } from 'lucide-react';
 import { Business } from '@/types/business';
+import { SubscriptionData } from '@/services/billing.service';
+import { useDialog } from '@/lib/use-dialog';
 
 interface SidebarProps {
   business?: Business | null;
+  subscription?: SubscriptionData | null;
   mobileOpen?: boolean;
   onCloseMobile?: () => void;
 }
+
+const PLAN_LABELS: Record<string, string> = {
+  starter: 'Starter',
+  pro: 'Pro Fleet',
+  enterprise: 'Enterprise',
+};
+
+const STATUS_LABELS: Record<string, { label: string; className: string; dot: string }> = {
+  trialing: {
+    label: 'Free trial',
+    className: 'text-blue-600',
+    dot: 'bg-blue-500',
+  },
+  active: {
+    label: 'Active',
+    className: 'text-emerald-600',
+    dot: 'bg-emerald-500',
+  },
+  past_due: {
+    label: 'Payment failed',
+    className: 'text-rose-600',
+    dot: 'bg-rose-500',
+  },
+  canceled: {
+    label: 'Cancelled',
+    className: 'text-slate-500',
+    dot: 'bg-slate-400',
+  },
+  incomplete: {
+    label: 'Action needed',
+    className: 'text-amber-600',
+    dot: 'bg-amber-500',
+  },
+};
 
 interface NavItem {
   name: string;
@@ -43,42 +82,73 @@ interface NavGroup {
   items: NavItem[];
 }
 
-export function Sidebar({ business, mobileOpen = false, onCloseMobile }: SidebarProps) {
+export function Sidebar({
+  business,
+  subscription,
+  mobileOpen = false,
+  onCloseMobile,
+}: SidebarProps) {
   const pathname = usePathname();
 
-  const companyName = business?.name || 'Apex Heating & AC';
-  const companyInitials = companyName
-    .split(' ')
-    .filter(Boolean)
-    .map((w) => w[0])
-    .join('')
-    .toUpperCase()
-    .substring(0, 2) || 'BC';
+  const drawerRef = useDialog<HTMLDivElement>({
+    isOpen: mobileOpen,
+    onClose: () => onCloseMobile?.(),
+  });
 
+  // Neutral placeholder rather than another business's name.
+  const companyName = business?.name || 'Your workspace';
+  const companyInitials =
+    companyName
+      .split(' ')
+      .filter(Boolean)
+      .map((w) => w[0])
+      .join('')
+      .toUpperCase()
+      .substring(0, 2) || 'BC';
+
+  const planLabel = subscription ? (PLAN_LABELS[subscription.tier] ?? subscription.tier) : null;
+  const statusMeta = subscription ? STATUS_LABELS[subscription.status] : null;
+
+  /**
+   * Navigation reflects only what actually works. Badges describe real state
+   * rather than aspirational labels, and the multi-location / calendar-sync
+   * entries were removed because those screens have no backend behind them.
+   */
   const navGroups: NavGroup[] = [
     {
       title: 'OPERATIONS',
       items: [
         { name: 'Dashboard', href: '/app', icon: LayoutDashboard, exact: true },
-        { name: 'Live Calls & Audio', href: '/app/calls', icon: PhoneCall },
-        { name: 'Field Appointments', href: '/app/appointments', icon: Calendar },
-        { name: 'Leads & Pipeline', href: '/app/leads', icon: UserPlus },
-        { name: 'Customers CRM', href: '/app/customers', icon: Users },
+        { name: 'Calls', href: '/app/calls', icon: PhoneCall },
+        { name: 'Appointments', href: '/app/appointments', icon: Calendar },
+        { name: 'Leads', href: '/app/leads', icon: UserPlus },
+        { name: 'Customers', href: '/app/customers', icon: Users },
+        { name: 'Field Worker App', href: '/worker', icon: Smartphone },
       ],
     },
     {
-      title: 'AI & TELEPHONY',
+      title: 'GROWTH',
       items: [
-        { name: 'Phone Line & Routing', href: '/app/settings/phone', icon: PhoneCall, badge: 'Live', badgeColor: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
-        { name: 'AI Policies & RAG', href: '/app/settings', icon: BookOpen },
+        { name: 'Missed Call Recovery', href: '/app/recovery', icon: Zap },
+        { name: 'Reviews', href: '/app/reviews', icon: Star },
+        { name: 'Messages', href: '/app/messages', icon: MessageSquare },
+      ],
+    },
+    {
+      title: 'MONEY',
+      items: [
+        { name: 'Invoices', href: '/app/invoices', icon: Receipt },
+        { name: 'Estimates', href: '/app/estimates', icon: FileCheck2 },
+        { name: 'Billing & Plan', href: '/app/billing', icon: CreditCard },
+      ],
+    },
+    {
+      title: 'SETUP',
+      items: [
+        { name: 'Phone Line', href: '/app/settings/phone', icon: PhoneForwarded },
+        { name: 'AI Knowledge & Rules', href: '/app/settings', icon: BookOpen },
         { name: 'Services & Pricing', href: '/app/services', icon: Wrench },
-      ],
-    },
-    {
-      title: 'FINANCIALS & ACCOUNT',
-      items: [
-        { name: 'Billing & Stripe Plans', href: '/app/billing', icon: CreditCard, badge: 'Pro', badgeColor: 'bg-blue-50 text-blue-700 border-blue-200' },
-        { name: 'Business Onboarding', href: '/onboarding', icon: Clock },
+        { name: 'Business Profile', href: '/onboarding', icon: Building2 },
       ],
     },
   ];
@@ -107,10 +177,12 @@ export function Sidebar({ business, mobileOpen = false, onCloseMobile }: Sidebar
 
         {onCloseMobile && (
           <button
+            type="button"
             onClick={onCloseMobile}
-            className="lg:hidden p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
+            aria-label="Close navigation menu"
+            className="lg:hidden p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
           >
-            <X className="h-5 w-5" />
+            <X className="h-5 w-5" aria-hidden="true" />
           </button>
         )}
       </div>
@@ -189,16 +261,23 @@ export function Sidebar({ business, mobileOpen = false, onCloseMobile }: Sidebar
               </div>
             </div>
 
-            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200 shrink-0">
-              Pro Fleet
-            </span>
+            {/* Real plan and status, read from the subscription. */}
+            {planLabel && (
+              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200 shrink-0">
+                {planLabel}
+              </span>
+            )}
           </div>
 
           <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-500">
-            <span className="flex items-center gap-1 font-medium text-emerald-600">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-              Stripe Active
-            </span>
+            {statusMeta ? (
+              <span className={`flex items-center gap-1 font-medium ${statusMeta.className}`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${statusMeta.dot}`} aria-hidden="true" />
+                {statusMeta.label}
+              </span>
+            ) : (
+              <span className="text-slate-400">No plan yet</span>
+            )}
             <span className="text-blue-600 group-hover:underline flex items-center gap-0.5 font-semibold">
               Manage &rarr;
             </span>
@@ -215,14 +294,22 @@ export function Sidebar({ business, mobileOpen = false, onCloseMobile }: Sidebar
         {sidebarContent}
       </aside>
 
-      {/* Mobile Drawer (Slide-Over) */}
+      {/* Mobile Drawer (Slide-Over). useDialog adds Escape-to-close, focus
+          trapping, focus restore and background scroll lock. */}
       {mobileOpen && (
         <div className="fixed inset-0 z-50 lg:hidden flex">
           <div
             className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs transition-opacity"
             onClick={onCloseMobile}
+            aria-hidden="true"
           />
-          <div className="relative flex-1 flex flex-col max-w-xs w-full bg-white shadow-xl z-10">
+          <div
+            ref={drawerRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Main navigation"
+            className="relative flex-1 flex flex-col max-w-xs w-full bg-white shadow-xl z-10"
+          >
             {sidebarContent}
           </div>
         </div>

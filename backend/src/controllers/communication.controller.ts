@@ -1,9 +1,12 @@
 import { Request, Response, NextFunction } from 'express';
 import { CommunicationService } from '../services/communication.service';
 import { BusinessService } from '../services/business.service';
+import { TwilioService } from '../services/twilio.service';
 import { AuthenticatedRequest } from '../types/auth.types';
 import { sendSuccess } from '../utils/response';
 import { AppError } from '../types';
+import { logger } from '../utils/logger';
+import { escapeXml } from '../utils/escape-xml';
 
 export class CommunicationController {
   private static async getBusinessId(userId: string): Promise<string> {
@@ -61,30 +64,55 @@ export class CommunicationController {
     }
   }
 
-  // POST /api/webhooks/twilio/sms (Public webhook)
+  /**
+   * POST /api/webhooks/twilio/sms (public webhook)
+   *
+   * Inbound SMS can create leads and book appointments, so an unverified
+   * endpoint here let anyone forge customer replies. The Twilio signature is
+   * now required.
+   */
   public static async handleInboundWebhook(req: Request, res: Response): Promise<void> {
     try {
-      const result = await CommunicationService.handleInboundSms(req.body);
-      if (result.reply) {
-        res.set('Content-Type', 'text/xml');
-        res.status(200).send(`<?xml version="1.0" encoding="UTF-8"?><Response><Message>${result.reply}</Message></Response>`);
+      if (!TwilioService.validateWebhookRequest(req as any)) {
+        logger.warn('sms_webhook_signature_rejected');
+        res.status(403).send('Invalid signature');
         return;
       }
+
+      const result = await CommunicationService.handleInboundSms(req.body);
+
       res.set('Content-Type', 'text/xml');
+      if (result.reply) {
+        // Escaped: the reply can echo customer-supplied text, which would
+        // otherwise break or inject into the TwiML document.
+        res
+          .status(200)
+          .send(
+            `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escapeXml(result.reply)}</Message></Response>`
+          );
+        return;
+      }
       res.status(200).send('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
     } catch (error) {
-      console.error('Error in Twilio SMS webhook:', error);
-      res.status(200).send('OK');
+      logger.error('sms_webhook_failed', { err: error });
+      res.set('Content-Type', 'text/xml');
+      res.status(200).send('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
     }
   }
 
-  // POST /api/webhooks/twilio/sms-status (Public webhook)
+  // POST /api/webhooks/twilio/sms-status (public webhook)
   public static async handleStatusCallback(req: Request, res: Response): Promise<void> {
     try {
+      if (!TwilioService.validateWebhookRequest(req as any)) {
+        logger.warn('sms_status_webhook_signature_rejected');
+        res.status(403).send('Invalid signature');
+        return;
+      }
+
       await CommunicationService.handleDeliveryStatus(req.body);
       res.status(200).send('OK');
     } catch (error) {
-      console.error('Error in Twilio SMS status callback:', error);
+      logger.error('sms_status_webhook_failed', { err: error });
       res.status(200).send('OK');
     }
   }

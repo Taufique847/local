@@ -154,9 +154,16 @@ export class MockVoiceProvider implements IVoiceProvider {
 }
 
 import { RealtimeVoiceProvider } from './realtime-voice-provider.service';
+import { logger } from '../../utils/logger';
 
 /**
- * Realtime Voice Provider factory
+ * Voice provider factory.
+ *
+ * The provider MUST be a singleton: it holds per-call state (the STT socket,
+ * conversation history, playback position) keyed by callSid. A previous version
+ * returned `new RealtimeVoiceProvider()` on every call to getProvider(), and
+ * getProvider() is invoked for every inbound 20 ms audio frame — so each frame
+ * met a provider with an empty state map and the call could never progress.
  */
 export class VoiceProviderService {
   private static currentProvider: IVoiceProvider | null = null;
@@ -164,13 +171,28 @@ export class VoiceProviderService {
   public static getProvider(type?: 'realtime' | 'mock'): IVoiceProvider {
     if (this.currentProvider) return this.currentProvider;
 
-    const providerType = type || process.env.VOICE_PROVIDER || 'mock';
-    if (providerType === 'realtime') {
-      return new RealtimeVoiceProvider();
+    const requested = type || config.voiceProvider || 'mock';
+
+    if (requested === 'realtime') {
+      if (RealtimeVoiceProvider.isFullyConfigured()) {
+        this.currentProvider = new RealtimeVoiceProvider();
+      } else {
+        // Falling back is safer than opening a media stream that can only emit
+        // silence: the mock provider at least produces a coherent transcript,
+        // and the warning makes the misconfiguration obvious in the logs.
+        logger.warn('voice_provider_downgraded_to_mock', {
+          reason: 'DEEPGRAM_API_KEY and/or OPENAI_API_KEY are not configured',
+        });
+        this.currentProvider = new MockVoiceProvider();
+      }
+    } else {
+      this.currentProvider = new MockVoiceProvider();
     }
-    return new MockVoiceProvider();
+
+    return this.currentProvider;
   }
 
+  /** Overrides the provider. Used by tests; pass null to reset. */
   public static setProvider(provider: IVoiceProvider | null): void {
     this.currentProvider = provider;
   }

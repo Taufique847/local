@@ -1,100 +1,57 @@
 import { AuthResponse, LoginCredentials, SignupData, User } from '../types/auth';
+import { apiClient } from '../lib/api-client';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
-
+/**
+ * Authentication calls.
+ *
+ * Routed through the shared client so failures carry status codes and field-level
+ * validation detail instead of a bare Error. Note the client deliberately does
+ * NOT attempt a token refresh on these paths: a 401 from login means wrong
+ * credentials, not an expired session.
+ */
 export class AuthService {
-  // Register new account
   public static async signup(data: SignupData): Promise<AuthResponse> {
-    const res = await fetch(`${API_BASE_URL}/api/auth/signup`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      },
-      credentials: 'include', // Send and receive HTTP-only cookies
-      body: JSON.stringify(data),
-    });
-
-    const json = await res.json();
-    if (!res.ok) {
-      throw new Error(json.message || 'Registration failed');
-    }
-    return json;
+    return apiClient.post<AuthResponse>('/api/auth/signup', data);
   }
 
-  // Sign in existing account
   public static async login(credentials: LoginCredentials): Promise<AuthResponse> {
-    const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      },
-      credentials: 'include',
-      body: JSON.stringify(credentials),
-    });
-
-    const json = await res.json();
-    if (!res.ok) {
-      throw new Error(json.message || 'Login failed');
-    }
-    return json;
+    return apiClient.post<AuthResponse>('/api/auth/login', credentials);
   }
 
-  // Sign out
   public static async logout(): Promise<void> {
-    const res = await fetch(`${API_BASE_URL}/api/auth/logout`, {
-      method: 'POST',
-      headers: {
-        'Accept': 'application/json',
-      },
-      credentials: 'include',
-    });
-
-    if (!res.ok) {
-      const json = await res.json().catch(() => ({}));
-      throw new Error(json.message || 'Logout failed');
-    }
+    await apiClient.post<{ success: boolean }>('/api/auth/logout');
   }
 
-  // Get current user session
+  /** Ends every session for the account, not just this browser. */
+  public static async logoutAll(): Promise<void> {
+    await apiClient.post<{ success: boolean }>('/api/auth/logout-all');
+  }
+
+  /**
+   * Current session, or null when not signed in.
+   *
+   * Swallows errors on purpose: callers use this to decide whether to render a
+   * signed-in shell, and "not logged in" is a normal answer rather than a fault.
+   */
   public static async getMe(): Promise<User | null> {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/auth/me`, {
-        method: 'GET',
-        headers: {
-          'Accept': 'application/json',
-        },
-        credentials: 'include',
-        cache: 'no-store',
-      });
-
-      if (!res.ok) {
-        return null;
-      }
-
-      const json: AuthResponse = await res.json();
+      const json = await apiClient.get<AuthResponse>('/api/auth/me');
       return json.user || null;
     } catch {
       return null;
     }
   }
 
-  // Test protected endpoint
-  public static async testProtectedEndpoint(): Promise<{ success: boolean; message: string }> {
-    const res = await fetch(`${API_BASE_URL}/api/auth/protected-test`, {
-      method: 'GET',
-      headers: {
-        'Accept': 'application/json',
-      },
-      credentials: 'include',
-      cache: 'no-store',
-    });
+  /** Re-sends the address confirmation email to the signed-in user. */
+  public static async requestEmailVerification(): Promise<void> {
+    await apiClient.post<{ success: boolean }>('/api/auth/verify-email/request');
+  }
 
-    const json = await res.json();
-    if (!res.ok) {
-      throw new Error(json.message || 'Protected endpoint test failed');
-    }
-    return json;
+  public static async confirmEmailVerification(token: string): Promise<void> {
+    await apiClient.post<{ success: boolean }>('/api/auth/verify-email/confirm', { token });
+  }
+
+  public static async testProtectedEndpoint(): Promise<{ success: boolean; message: string }> {
+    return apiClient.get<{ success: boolean; message: string }>('/api/auth/protected-test');
   }
 }

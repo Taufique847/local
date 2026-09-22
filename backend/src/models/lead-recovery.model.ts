@@ -25,6 +25,12 @@ export interface ILeadRecovery extends Document {
   step3SentAt?: Date;
   nextFollowUpAt?: Date;
   recoveredAppointmentId?: Types.ObjectId;
+  /**
+   * Failed send attempts for the step currently pending. Bounds retries so a
+   * permanently broken telephony config cannot requeue a drip forever.
+   */
+  dripAttempts: number;
+  lastDripError?: string;
   messages: Array<{
     direction: 'outbound' | 'inbound';
     text: string;
@@ -107,6 +113,15 @@ const LeadRecoverySchema = new Schema<ILeadRecovery>(
     recoveredAppointmentId: {
       type: Schema.Types.ObjectId,
       ref: 'Appointment',
+    },
+    dripAttempts: {
+      type: Number,
+      default: 0,
+    },
+    lastDripError: {
+      type: String,
+      trim: true,
+      maxlength: 500,
     },
     messages: [
       {

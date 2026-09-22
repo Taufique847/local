@@ -36,6 +36,29 @@ const userSchema = new Schema<IUser>(
       type: Boolean,
       default: true,
     },
+    /**
+     * Set once the user has proven control of their email address.
+     *
+     * Kept as a timestamp rather than a boolean so it doubles as an audit trail.
+     * Null means unverified; whether that blocks login is governed by
+     * REQUIRE_EMAIL_VERIFICATION.
+     */
+    emailVerifiedAt: {
+      type: Date,
+      default: null,
+    },
+    /**
+     * Bumping this invalidates every access token already issued to the user.
+     *
+     * Access tokens are stateless, so logout previously only deleted the cookie
+     * — the token itself stayed valid for its full lifetime. This gives a way to
+     * actually revoke: sign the current version into the token and reject any
+     * token carrying an older one.
+     */
+    tokenVersion: {
+      type: Number,
+      default: 0,
+    },
   },
   {
     timestamps: true,

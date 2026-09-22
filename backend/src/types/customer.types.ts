@@ -21,6 +21,8 @@ export interface ICustomer extends Document {
   tags: string[];
   lifetimeValue: number;
   notes?: string;
+  /** Set when identifying fields were scrubbed in response to a deletion request. */
+  personalDataErasedAt?: Date | null;
   status: CustomerStatus;
   source: string;
   createdAt: Date;

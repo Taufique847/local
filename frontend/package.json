@@ -1,11 +1,11 @@
 {
   "name": "bluecollar-ai-frontend",
   "version": "1.0.0",
-  "description": "Frontend for BlueCollar AI - M1 Foundation",
+  "description": "BlueCollar AI frontend — contractor dashboard, customer portal and marketing site",
   "private": true,
   "scripts": {
     "dev": "next dev -p 3000",
-    "build": "next build",
+    "build": "node scripts/build.mjs",
     "start": "next start -p 3000",
     "lint": "next lint",
     "typecheck": "tsc --noEmit"

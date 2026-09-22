@@ -75,6 +75,17 @@ const customerSchema = new Schema<ICustomer>(
       type: String,
       default: 'manual',
     },
+    /**
+     * Set when the customer's personal data was erased on request.
+     *
+     * The record itself is kept rather than deleted, because appointments and
+     * invoices reference it and a business has to retain financial history. The
+     * identifying fields are scrubbed; this timestamp records that it happened.
+     */
+    personalDataErasedAt: {
+      type: Date,
+      default: null,
+    },
   },
   {
     timestamps: true,

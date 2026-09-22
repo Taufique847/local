@@ -8,6 +8,7 @@ import {
   AssignPhoneNumberInput,
 } from '../types/telephony.types';
 import { AppError } from '../types';
+import { BillingService } from './billing.service';
 
 export class PhoneNumberService {
   /**
@@ -56,7 +57,17 @@ export class PhoneNumberService {
       throw new AppError('This phone number is already connected to another business account', 409);
     }
 
-    const isFirst = (await BusinessPhoneNumber.countDocuments({ businessId, status: 'active' })) === 0;
+    const activeCount = await BusinessPhoneNumber.countDocuments({ businessId, status: 'active' });
+
+    // Plan enforcement. `phoneNumbersAllocated` existed on the subscription but
+    // was never checked, so any account could add unlimited billable lines.
+    // Re-activating a number this business already owns is not a new line.
+    const isReactivation = Boolean(existing && existing.businessId.toString() === businessId.toString());
+    if (!isReactivation) {
+      await BillingService.assertCanProvisionPhoneNumber(businessId, activeCount);
+    }
+
+    const isFirst = activeCount === 0;
     const shouldBePrimary = input.isPrimary !== undefined ? input.isPrimary : isFirst;
 
     if (shouldBePrimary) {
@@ -83,7 +94,10 @@ export class PhoneNumberService {
       businessId,
       provider: 'twilio',
       phoneNumber: cleanedNumber,
-      phoneNumberSid: input.phoneNumberSid || `PN_${Date.now()}`,
+      // Left unset when the number was not provisioned through Twilio. It used
+      // to default to `PN_<timestamp>`, which looks exactly like a Twilio SID
+      // and made externally-owned lines indistinguishable from purchased ones.
+      phoneNumberSid: input.phoneNumberSid || undefined,
       friendlyName: input.friendlyName || `${business.name} Main Line`,
       country: input.country || 'US',
       capabilities: { voice: true, sms: true },

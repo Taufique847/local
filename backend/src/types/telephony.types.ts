@@ -83,8 +83,49 @@ export interface ICallLog extends Document {
   aiHandled?: boolean;
   transcript?: ITranscriptTurn[];
   toolExecutions?: IToolExecutionAudit[];
+  metrics?: ICallMetrics;
+  /**
+   * True for owner-initiated test calls. These are real calls through the real
+   * pipeline, but they are excluded from reporting so a contractor trying the
+   * assistant does not inflate their own answer rate or booking numbers.
+   */
+  isTest?: boolean;
   createdAt: Date;
   updatedAt: Date;
+}
+
+/**
+ * Whether a business can currently place a test call, and what is missing if not.
+ */
+export interface TestCallReadiness {
+  ready: boolean;
+  blockers: string[];
+  telephonyConfigured: boolean;
+  voiceProvider: string;
+  voiceEngineReady: boolean;
+  aiPhoneNumber: string | null;
+  /** Destination the test call will dial. */
+  destinationPhone: string | null;
+  callsRemainingThisHour: number;
+}
+
+/**
+ * Measured voice-engine performance and provider usage for one call. Populated
+ * by the realtime voice provider so latency and spend are observable instead of
+ * assumed.
+ */
+export interface ICallMetrics {
+  avgTurnLatencyMs?: number;
+  maxTurnLatencyMs?: number;
+  turnCount?: number;
+  sttAudioSeconds?: number;
+  llmRequests?: number;
+  llmPromptTokens?: number;
+  llmCompletionTokens?: number;
+  ttsCharacters?: number;
+  providerErrors?: number;
+  bargeInCount?: number;
+  endedReason?: string;
 }
 
 export interface AssignPhoneNumberInput {
@@ -103,6 +144,8 @@ export interface CallQueryFilter {
   status?: string;
   date?: string; // YYYY-MM-DD
   customerId?: string;
+  /** Pass 'true' to include owner-initiated test calls in the results. */
+  includeTest?: string | boolean;
 }
 
 export interface AvailablePhoneNumberDTO {

@@ -7,6 +7,9 @@ import { AppointmentService } from '../appointment.service';
 import { CommunicationService } from '../communication.service';
 import { CustomerService } from '../customer.service';
 import { KnowledgeBaseService } from '../knowledge-base.service';
+import { Business } from '../../models/business.model';
+import { TwilioService } from '../twilio.service';
+import { PolicyGuardrailsService } from '../policy-guardrails.service';
 
 export class ToolRegistry {
   private static tools: Map<string, IToolDefinition> = new Map();
@@ -24,7 +27,8 @@ export class ToolRegistry {
   }
 
   /**
-   * Generates OpenAI / Azure Realtime tool schemas
+   * Tool schemas in the OpenAI / Azure **Realtime** API shape, where the name
+   * and parameters sit at the top level of the tool object.
    */
   public static getOpenAIToolSchemas(): any[] {
     return this.getAllTools().map((t) => ({
@@ -32,6 +36,25 @@ export class ToolRegistry {
       name: t.name,
       description: t.description,
       parameters: t.parameters,
+    }));
+  }
+
+  /**
+   * Tool schemas in the **Chat Completions** shape, which nests the definition
+   * under a `function` key.
+   *
+   * These two formats are not interchangeable: sending the Realtime shape to
+   * /v1/chat/completions is rejected as a malformed request, so the voice
+   * pipeline must use this method.
+   */
+  public static getChatCompletionToolSchemas(): any[] {
+    return this.getAllTools().map((t) => ({
+      type: 'function',
+      function: {
+        name: t.name,
+        description: t.description,
+        parameters: t.parameters,
+      },
     }));
   }
 
@@ -338,12 +361,46 @@ export class ToolRegistry {
         required: ['reason'],
       },
       execute: async (args, ctx) => {
+        const [business, policy] = await Promise.all([
+          Business.findById(ctx.businessId),
+          PolicyGuardrailsService.getPolicy(ctx.businessId),
+        ]);
+
+        // Prefer the configured escalation number. A model-supplied number is
+        // NOT trusted: letting the LLM choose an arbitrary destination would
+        // allow a caller to talk the AI into dialling any number at the
+        // contractor's expense.
+        const target = policy?.emergencyTransferPhone || business?.phone;
+
+        if (!target) {
+          return {
+            transferInitiated: false,
+            reason: args.reason,
+            error: 'no_transfer_number_configured',
+            instruction:
+              'Tell the caller a team member will call them back immediately, and take their callback number.',
+          };
+        }
+
+        const result = await TwilioService.transferCall(ctx.callSid, target, {
+          callerId: business?.phone,
+          whisper: args.isEmergency
+            ? 'This is an emergency call. Connecting you to our team now.'
+            : 'Please hold while I connect you with our team.',
+        });
+
         return {
-          transferInitiated: true,
+          transferInitiated: result.transferred,
           reason: args.reason,
-          targetNumber: args.targetPhone || '+15551234567',
+          targetNumber: target,
           isEmergency: Boolean(args.isEmergency),
-          instruction: 'Please hold while I connect you directly with our emergency dispatch team.',
+          ...(result.transferred
+            ? { instruction: 'The call is being connected. Stop speaking now.' }
+            : {
+                error: result.reason,
+                instruction:
+                  'The transfer failed. Apologise, take a callback number, and tell the caller the owner will ring them straight back.',
+              }),
         };
       },
     });

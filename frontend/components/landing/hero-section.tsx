@@ -54,15 +54,22 @@ export function HeroSection({ onOpenBookingModal }: HeroSectionProps) {
           initial={{ opacity: 0, y: 15 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, delay: 0.2 }}
-          className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-2"
+          className="flex flex-col sm:flex-row items-center justify-center gap-3.5 pt-2"
         >
+          {/*
+            Points at the scripted demo below rather than a "live microphone
+            demo". The old button opened a browser imitation — Web Speech API
+            voice and a keyword script — presented as talking to the real
+            assistant. Contractors try the real thing from their dashboard after
+            signing up, where it places an actual phone call.
+          */}
           <a
             href="#voice-demo"
-            className="w-full sm:w-auto inline-flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm px-8 h-12 rounded-xl shadow-md transition-all active:scale-95"
+            className="w-full sm:w-auto inline-flex items-center justify-center gap-2.5 bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-600 hover:from-blue-700 hover:to-indigo-700 text-white font-bold text-sm px-8 h-12 rounded-xl shadow-lg shadow-blue-500/25 transition-all active:scale-95 group"
           >
-            <Play className="w-4 h-4 fill-white" />
-            Watch Demo
-            <ArrowRight className="w-4 h-4 ml-1" />
+            <Play className="w-4 h-4 shrink-0" aria-hidden="true" />
+            Hear an emergency call
+            <ArrowRight className="w-4 h-4 group-hover:translate-x-0.5 transition-transform" />
           </a>
 
           <a

@@ -33,10 +33,13 @@ export function Navbar({ onOpenBookingModal }: NavbarProps) {
         </Link>
 
         {/* Desktop Navigation Links */}
-        <nav className="hidden md:flex items-center gap-7 text-xs font-medium text-slate-600">
-          <a href="#voice-demo" className="hover:text-blue-600 transition-colors flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-blue-600 animate-pulse" />
-            Live Voice Demo
+        <nav className="hidden md:flex items-center gap-6 text-xs font-medium text-slate-600">
+          <a
+            href="#voice-demo"
+            className="hover:text-blue-600 font-semibold transition-colors flex items-center gap-1.5 text-blue-600 bg-blue-50/70 hover:bg-blue-100/70 border border-blue-200 px-3 py-1.5 rounded-xl"
+          >
+            <Play className="w-3 h-3" aria-hidden="true" />
+            Hear a call
           </a>
           <a href="#features" className="hover:text-blue-600 transition-colors">
             Features
@@ -56,28 +59,38 @@ export function Navbar({ onOpenBookingModal }: NavbarProps) {
         </nav>
 
         {/* Desktop Action Buttons */}
-        <div className="hidden sm:flex items-center gap-3">
+        <div className="hidden sm:flex items-center gap-2">
           <Link
             href="/login"
-            className="text-xs font-medium text-slate-700 hover:text-slate-900 px-3.5 py-2 rounded-lg hover:bg-slate-100 transition-colors"
+            className="text-xs font-medium text-slate-700 hover:text-slate-900 px-3 py-2 rounded-lg hover:bg-slate-100 transition-colors"
           >
-            Sign In
+            Sign in
           </Link>
-          <a
-            href="#voice-demo"
+          {/* Primary conversion path. The landing page previously had no signup
+              entry point at all — /signup was reachable only from a link in the
+              login page footer. */}
+          <Link
+            href="/signup"
             className="inline-flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold px-4 h-9 rounded-xl shadow-sm transition-all active:scale-95"
           >
-            <Play className="w-3.5 h-3.5 fill-white" />
-            Watch Demo
-          </a>
+            <Sparkles className="w-3.5 h-3.5 text-blue-200" aria-hidden="true" />
+            Start free trial
+          </Link>
         </div>
 
         {/* Mobile Hamburger */}
         <button
+          type="button"
           onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+          aria-expanded={mobileMenuOpen}
+          aria-label={mobileMenuOpen ? 'Close navigation menu' : 'Open navigation menu'}
           className="md:hidden p-2 rounded-lg text-slate-600 hover:text-slate-900 hover:bg-slate-100"
         >
-          {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+          {mobileMenuOpen ? (
+            <X className="w-5 h-5" aria-hidden="true" />
+          ) : (
+            <Menu className="w-5 h-5" aria-hidden="true" />
+          )}
         </button>
       </div>
 
@@ -130,19 +143,28 @@ export function Navbar({ onOpenBookingModal }: NavbarProps) {
           </div>
 
           <div className="pt-3 border-t border-slate-200 flex flex-col gap-2">
-            <a
-              href="#voice-demo"
+            <Link
+              href="/signup"
               onClick={() => setMobileMenuOpen(false)}
               className="w-full inline-flex items-center justify-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold py-2.5 rounded-xl shadow-sm"
             >
-              <Play className="w-3.5 h-3.5 fill-white" />
-              Watch Demo
+              <Sparkles className="w-3.5 h-3.5 text-blue-200" aria-hidden="true" />
+              Start free trial
+            </Link>
+            <a
+              href="#voice-demo"
+              onClick={() => setMobileMenuOpen(false)}
+              className="w-full inline-flex items-center justify-center gap-1.5 border border-slate-300 bg-white text-slate-800 text-xs font-semibold py-2.5 rounded-xl"
+            >
+              <Play className="w-3.5 h-3.5" aria-hidden="true" />
+              Hear a sample call
             </a>
             <Link
               href="/login"
+              onClick={() => setMobileMenuOpen(false)}
               className="text-center py-2 text-xs text-slate-600 hover:text-slate-900"
             >
-              Sign In to Dashboard
+              Sign in to dashboard
             </Link>
           </div>
         </div>

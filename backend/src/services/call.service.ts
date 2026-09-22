@@ -8,10 +8,20 @@ import {
   CallQueryFilter,
   TwilioWebhookVoiceBody,
   CallStatus,
+  TestCallReadiness,
 } from '../types/telephony.types';
 import { AppError } from '../types';
+import { resolveBusinessForInboundNumber } from './business-resolver.service';
+import { TwilioService } from './twilio.service';
+import { BillingService } from './billing.service';
+import { RealtimeVoiceProvider } from './voice/realtime-voice-provider.service';
+import { config } from '../config/env';
+import { logger } from '../utils/logger';
 
 export class CallService {
+  /** Test calls allowed per business per rolling hour. */
+  private static readonly TEST_CALLS_PER_HOUR = 5;
+
   /**
    * List calls for a business with pagination, filters, and search.
    */
@@ -20,6 +30,12 @@ export class CallService {
     filter: CallQueryFilter
   ): Promise<{ calls: ICallLog[]; total: number; page: number; totalPages: number }> {
     const query: any = { businessId };
+
+    // Owner test calls are hidden unless explicitly requested, so the call
+    // history reflects customer activity.
+    if (String(filter.includeTest) !== 'true') {
+      query.isTest = { $ne: true };
+    }
 
     if (filter.direction && filter.direction !== 'all') {
       query.direction = filter.direction;
@@ -125,20 +141,21 @@ export class CallService {
       });
     }
 
-    let businessId: any;
-    let business: any;
+    let business: any = businessPhone ? await Business.findById(businessPhone.businessId) : null;
 
-    if (businessPhone) {
-      businessId = businessPhone.businessId;
-      business = await Business.findById(businessId);
-    } else {
-      // Fallback to first active business in DB to prevent dropped calls in dev
-      business = await Business.findOne();
-      if (!business) {
-        throw new AppError('No business found to route inbound call', 404);
+    if (!business) {
+      // No provisioned number matched. A dev-only single-tenant fallback is
+      // allowed; otherwise refuse rather than attributing this call to an
+      // arbitrary unrelated business (the previous behaviour).
+      const resolved = await resolveBusinessForInboundNumber(To);
+      business = resolved.business;
+      if (!resolved.business) {
+        throw new AppError(`Inbound number ${To} is not provisioned to any business`, 404);
       }
-      businessId = business._id;
+      if (resolved.phoneRecord) businessPhone = resolved.phoneRecord;
     }
+
+    const businessId: any = business._id;
 
     // 3. Customer Matching: Check if caller (From) matches an existing customer
     let customerId: Types.ObjectId | null = null;
@@ -202,98 +219,212 @@ export class CallService {
   }
 
   /**
-   * Simulate an inbound test call (for testing telephony without live Twilio number).
+   * Reports whether an owner-initiated test call can be placed right now.
+   *
+   * Every blocker is named so the UI can tell the contractor exactly what to fix
+   * instead of failing with a generic error after they press the button.
    */
-  public static async simulateInboundCall(
-    businessId: Types.ObjectId | string,
-    callerPhone: string,
-    durationSeconds: number = 45,
-    options: { transcript?: any[]; outcome?: string; notes?: string } = {}
-  ): Promise<ICallLog> {
+  public static async getTestCallReadiness(
+    businessId: Types.ObjectId | string
+  ): Promise<TestCallReadiness> {
     const business = await Business.findById(businessId);
     if (!business) {
       throw new AppError('Business not found', 404);
     }
 
-    const businessPhone = await BusinessPhoneNumber.findOne({ businessId, isPrimary: true });
-    const to = businessPhone ? businessPhone.phoneNumber : '+18005550199';
+    const telephonyConfigured = TwilioService.isConfigured();
+    const voiceProvider = config.voiceProvider;
+    const voiceEngineReady =
+      voiceProvider === 'realtime' ? RealtimeVoiceProvider.isFullyConfigured() : voiceProvider !== 'off';
 
-    // Match customer
-    const digits = callerPhone.replace(/[^\d]/g, '');
-    const last10 = digits.slice(-10);
-    let customer = null;
-
-    if (last10.length >= 7) {
-      const flexiblePattern = last10.split('').join('[^\\d]*');
-      customer = await Customer.findOne({
-        businessId,
-        phone: { $regex: new RegExp(flexiblePattern) },
-      });
-    }
-
-    const callSid = `CA_sim_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
-
-    const defaultConvo = {
-      summary: 'Caller reported upstairs AC blowing warm air in 95°F heat. Alex AI qualified urgency, verified Dallas 75201 service zone, and successfully booked a Saturday morning emergency diagnostic slot ($89 diagnostic credited to repair).',
-      sentiment: 'positive' as const,
-      outcome: 'appointment_booked',
-      notes: 'Emergency AC diagnostic booked for Saturday 9:00 AM - 11:00 AM. Senior tech Mike assigned. Confirmation SMS dispatched.',
-      transcript: [
-        { role: 'assistant', text: 'Thank you for calling Arctic Air HVAC! My name is Alex, your 24/7 assistant. How can I help you today?', timestamp: new Date(Date.now() - durationSeconds * 1000) },
-        { role: 'user', text: "Hi Alex! My upstairs AC unit just started blowing warm air, and it's 95 degrees outside. Can you get someone out here soon?", timestamp: new Date(Date.now() - (durationSeconds - 8) * 1000) },
-        { role: 'assistant', text: "I completely understand how urgent that is in this heat! May I please confirm your street address or zip code so I can check technician availability in your neighborhood?", timestamp: new Date(Date.now() - (durationSeconds - 16) * 1000) },
-        { role: 'user', text: "Yes, I'm at 742 Evergreen Terrace in Dallas, zip code 75201.", timestamp: new Date(Date.now() - (durationSeconds - 24) * 1000) },
-        { role: 'assistant', text: "Thank you! We have certified technicians in 75201. I have an opening tomorrow morning between 9:00 AM and 11:00 AM with Mike, our senior HVAC specialist. Would that work for you?", timestamp: new Date(Date.now() - (durationSeconds - 32) * 1000) },
-        { role: 'user', text: "Yes, 9:00 AM to 11:00 AM works great! What is your diagnostic fee?", timestamp: new Date(Date.now() - (durationSeconds - 40) * 1000) },
-        { role: 'assistant', text: "Our comprehensive diagnostic fee is $89, which is 100% credited toward the repair if you decide to proceed with us. Shall I lock that in for you?", timestamp: new Date(Date.now() - (durationSeconds - 48) * 1000) },
-        { role: 'user', text: "Yes, please lock that in. Thank you for making this so easy!", timestamp: new Date(Date.now() - (durationSeconds - 54) * 1000) },
-        { role: 'assistant', text: "Done! Your appointment is locked for tomorrow between 9 AM and 11 AM. I've also dispatched a confirmation SMS with tracking to your mobile. Stay cool and have a wonderful day!", timestamp: new Date(Date.now() - (durationSeconds - 58) * 1000) },
-      ],
-      toolExecutions: [
-        { toolName: 'verify_service_territory', arguments: { zipCode: '75201', trade: 'hvac' }, result: { inTerritory: true, territoryName: 'Dallas Metro Fleet' }, durationMs: 92 },
-        { toolName: 'get_available_technicians', arguments: { zipCode: '75201', requestedWindow: 'morning' }, result: { availableSlots: 3, assignedTech: 'Mike R. (Senior Master Tech)' }, durationMs: 135 },
-        { toolName: 'book_calendar_appointment', arguments: { time: '09:00 AM - 11:00 AM', customerPhone: callerPhone, serviceType: 'Emergency AC Diagnostic' }, result: { appointmentId: 'apt_sim_7482', status: 'confirmed', priceEstimate: '$89' }, durationMs: 215 },
-        { toolName: 'dispatch_confirmation_sms', arguments: { to: callerPhone, template: 'booking_confirmed' }, result: { messageSid: 'SM_sim_84920', status: 'delivered' }, durationMs: 180 },
-      ],
-    };
-
-    const call = await CallLog.create({
+    const aiLine = await BusinessPhoneNumber.findOne({
       businessId,
-      phoneNumberId: businessPhone?._id || null,
-      provider: 'twilio',
-      providerCallSid: callSid,
-      direction: 'inbound',
-      from: callerPhone,
-      to,
-      status: 'completed',
-      startedAt: new Date(Date.now() - durationSeconds * 1000),
-      answeredAt: new Date(Date.now() - durationSeconds * 1000),
-      endedAt: new Date(),
-      durationSeconds,
-      customerId: customer ? customer._id : null,
-      aiHandled: true,
-      summary: defaultConvo.summary,
-      sentiment: defaultConvo.sentiment,
-      transcript: options.transcript && options.transcript.length > 0 ? options.transcript : defaultConvo.transcript,
-      toolExecutions: defaultConvo.toolExecutions,
-      outcome: options.outcome || defaultConvo.outcome,
-      notes: options.notes || defaultConvo.notes,
+      status: 'active',
+      isPrimary: true,
     });
 
-    return CallLog.findById(call._id).populate('customerId', 'firstName lastName phone email') as any;
+    const destinationPhone = await this.resolveTestCallDestination(businessId, business);
+    const callsUsed = await this.countRecentTestCalls(businessId);
+    const callsRemainingThisHour = Math.max(0, this.TEST_CALLS_PER_HOUR - callsUsed);
+
+    const blockers: string[] = [];
+    if (!telephonyConfigured) {
+      blockers.push('Twilio is not configured on this server, so no call can be placed.');
+    }
+    if (!aiLine) {
+      blockers.push('No active AI phone line is connected. Add one in Settings → Phone.');
+    }
+    if (!destinationPhone) {
+      blockers.push('Add your business phone number in Settings so the test call has somewhere to ring.');
+    }
+    if (voiceProvider === 'off') {
+      blockers.push('The voice engine is switched off (VOICE_PROVIDER=off).');
+    } else if (!voiceEngineReady) {
+      blockers.push(
+        'Speech and language provider keys are missing, so the assistant cannot hold a conversation yet.'
+      );
+    }
+    if (callsRemainingThisHour === 0) {
+      blockers.push(`Test call limit reached (${this.TEST_CALLS_PER_HOUR} per hour). Try again later.`);
+    }
+
+    return {
+      ready: blockers.length === 0,
+      blockers,
+      telephonyConfigured,
+      voiceProvider,
+      voiceEngineReady,
+      aiPhoneNumber: aiLine?.phoneNumber || null,
+      destinationPhone,
+      callsRemainingThisHour,
+    };
+  }
+
+  /**
+   * Places a real outbound call from the business's AI line to the owner.
+   *
+   * Replaces `simulateInboundCall`, which fabricated an entire conversation —
+   * transcript, tool executions, a "Mike R." technician, an
+   * `appointment_booked` outcome — and wrote it to CallLog as a genuine
+   * AI-handled call. Owners believed they had tested the assistant, and the
+   * invented records fed the dashboard's own KPIs.
+   *
+   * When the owner answers, Twilio fetches TwiML from the test-call webhook and
+   * the call enters the same media stream, speech recognition, language model
+   * and speech synthesis path an inbound customer call uses.
+   */
+  public static async startTestCall(
+    businessId: Types.ObjectId | string
+  ): Promise<{ callId: string; callSid: string; to: string; from: string }> {
+    const readiness = await this.getTestCallReadiness(businessId);
+    if (!readiness.ready) {
+      throw new AppError(readiness.blockers[0], 409);
+    }
+
+    // A test call consumes real provider minutes, so it is metered like any other.
+    const entitlement = await BillingService.checkEntitlement(businessId);
+    if (!entitlement.allowed) {
+      throw new AppError(
+        entitlement.reason || 'Your plan does not currently allow placing calls.',
+        402
+      );
+    }
+
+    const from = readiness.aiPhoneNumber!;
+    const to = readiness.destinationPhone!;
+
+    const baseUrl = config.twilioWebhookBaseUrl;
+    if (!baseUrl || baseUrl.startsWith('http://localhost')) {
+      throw new AppError(
+        'TWILIO_WEBHOOK_BASE_URL must be a public HTTPS address for Twilio to reach this server. Start a tunnel and set it before placing a test call.',
+        409
+      );
+    }
+
+    const { callSid } = await TwilioService.placeOutboundCall({
+      to,
+      from,
+      twimlUrl: `${baseUrl}/api/webhooks/twilio/test-call`,
+      statusCallbackUrl: `${baseUrl}/api/webhooks/twilio/status`,
+    });
+
+    const aiLine = await BusinessPhoneNumber.findOne({ businessId, phoneNumber: from });
+
+    // Created immediately because VoiceSessionService.endSession persists the
+    // transcript with findOneAndUpdate({ providerCallSid }) — without this row
+    // the conversation would be discarded when the call ends.
+    const callLog = await CallLog.create({
+      businessId,
+      phoneNumberId: aiLine?._id || null,
+      provider: 'twilio',
+      providerCallSid: callSid,
+      direction: 'outbound',
+      from,
+      to,
+      status: 'initiated',
+      startedAt: new Date(),
+      isTest: true,
+      notes: 'Owner-initiated test call.',
+    });
+
+    logger.info('test_call_started', {
+      businessId: String(businessId),
+      callSid,
+      to,
+      from,
+    });
+
+    return { callId: callLog._id.toString(), callSid, to, from };
+  }
+
+  /**
+   * Destination for a test call.
+   *
+   * Deliberately NOT caller-supplied. Accepting an arbitrary number would turn
+   * an authenticated account into an open dialer on our Twilio credentials —
+   * a toll-fraud and robocall vector. Owners change where the test rings by
+   * updating their own business profile or escalation number.
+   */
+  private static async resolveTestCallDestination(
+    businessId: Types.ObjectId | string,
+    business: any
+  ): Promise<string | null> {
+    if (business?.phone) return business.phone;
+
+    try {
+      const { PolicyGuardrailsService } = await import('./policy-guardrails.service');
+      const policy = await PolicyGuardrailsService.getPolicy(businessId);
+      return policy?.emergencyTransferPhone || null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Looks up a test call by its provider SID.
+   *
+   * The test-call TwiML webhook uses this instead of trusting anything in the
+   * request body: only a call this server actually placed can open a media
+   * stream, and the row already carries the resolved tenant.
+   */
+  public static async findTestCallBySid(callSid: string): Promise<ICallLog | null> {
+    return CallLog.findOne({ providerCallSid: callSid, isTest: true });
+  }
+
+  /** Records that the owner picked up, so a no-answer is distinguishable. */
+  public static async markTestCallAnswered(callSid: string): Promise<void> {
+    await CallLog.updateOne(
+      { providerCallSid: callSid, isTest: true },
+      { $set: { status: 'in_progress', answeredAt: new Date() } }
+    );
+  }
+
+  private static async countRecentTestCalls(
+    businessId: Types.ObjectId | string
+  ): Promise<number> {
+    return CallLog.countDocuments({
+      businessId,
+      isTest: true,
+      createdAt: { $gte: new Date(Date.now() - 60 * 60 * 1000) },
+    });
   }
 
   /**
    * Call statistics for dashboard and reporting.
+   *
+   * Test calls are excluded: they are real calls, but they are the owner talking
+   * to their own assistant, not customer demand.
    */
   public static async getCallStats(
     businessId: Types.ObjectId | string
   ): Promise<{ total: number; inbound: number; completed: number; missed: number }> {
+    const real = { businessId, isTest: { $ne: true } };
+
     const [total, inbound, completed, missed] = await Promise.all([
-      CallLog.countDocuments({ businessId }),
-      CallLog.countDocuments({ businessId, direction: 'inbound' }),
-      CallLog.countDocuments({ businessId, status: 'completed' }),
-      CallLog.countDocuments({ businessId, status: { $in: ['no_answer', 'failed', 'busy'] } }),
+      CallLog.countDocuments(real),
+      CallLog.countDocuments({ ...real, direction: 'inbound' }),
+      CallLog.countDocuments({ ...real, status: 'completed' }),
+      CallLog.countDocuments({ ...real, status: { $in: ['no_answer', 'failed', 'busy'] } }),
     ]);
 
     return { total, inbound, completed, missed };

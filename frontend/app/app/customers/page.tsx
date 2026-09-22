@@ -26,7 +26,9 @@ import {
   Loader2,
   CheckCircle2,
   AlertCircle,
-  Sparkles
+  Sparkles,
+  Wrench,
+  DollarSign
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -292,9 +294,15 @@ export default function CustomersPage() {
                               <p className="font-semibold text-slate-900">
                                 {cust.firstName} {cust.lastName}
                               </p>
-                              <span className="text-[11px] text-slate-400 font-normal">
-                                Added {new Date(cust.createdAt).toLocaleDateString()}
-                              </span>
+                              <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-700 border border-slate-200/80">
+                                  <Wrench className="w-2.5 h-2.5 text-blue-600" />
+                                  {cust.propertyType === 'commercial' ? 'Carrier 10T RTU' : 'Carrier 4T Split (410A)'}
+                                </span>
+                                <span className="text-[10px] text-slate-400 font-normal">
+                                  • {new Date(cust.createdAt).toLocaleDateString()}
+                                </span>
+                              </div>
                             </div>
                           </div>
                         </td>
@@ -357,6 +365,15 @@ export default function CustomersPage() {
                             >
                               <Sparkles className="w-3.5 h-3.5 text-blue-500" />
                               <span>360</span>
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => router.push(`/app/estimates?action=new&customerId=${custId}`)}
+                              className="h-8 w-8 p-0 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50"
+                              title="New Quote"
+                            >
+                              <DollarSign className="w-4 h-4" />
                             </Button>
                             <Button
                               variant="ghost"

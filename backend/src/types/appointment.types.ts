@@ -4,6 +4,8 @@ export type AppointmentStatus =
   | 'scheduled'
   | 'confirmed'
   | 'rescheduled'
+  | 'en_route'
+  | 'arrived'
   | 'in_progress'
   | 'completed'
   | 'cancelled'
@@ -30,12 +32,39 @@ export interface IRescheduleRecord {
   changedBy: string;
 }
 
+export interface ICheckInInfo {
+  timestamp: Date;
+  latitude?: number;
+  longitude?: number;
+  address?: string;
+}
+
+export interface IJobChecklistItem {
+  item: string;
+  completed: boolean;
+}
+
+export interface IJobPhoto {
+  url: string;
+  caption?: string;
+  phase: 'before' | 'after';
+  uploadedAt: Date;
+}
+
+export interface IPartUsed {
+  partName: string;
+  quantity: number;
+  unitCost: number;
+  totalCost: number;
+}
+
 export interface IAppointment extends Document {
   _id: Types.ObjectId;
   businessId: Types.ObjectId;
   customerId: Types.ObjectId;
   leadId?: Types.ObjectId;
   serviceId: Types.ObjectId;
+  technicianId?: Types.ObjectId;
   title: string;
   description?: string;
   startAt: Date;
@@ -50,6 +79,11 @@ export interface IAppointment extends Document {
   internalNotes?: string;
   cancellationReason?: string;
   rescheduleHistory: IRescheduleRecord[];
+  checkIn?: ICheckInInfo;
+  checkOut?: ICheckInInfo;
+  checklist?: IJobChecklistItem[];
+  photos?: IJobPhoto[];
+  partsUsed?: IPartUsed[];
   createdBy: string;
   createdAt: Date;
   updatedAt: Date;

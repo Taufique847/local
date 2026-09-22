@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/auth-context';
 import { BusinessService } from '@/services/business.service';
@@ -21,8 +21,15 @@ import {
   Trash2,
   AlertCircle,
   ShieldCheck,
-  Check
+  Check,
+  PhoneCall,
+  PhoneForwarded,
 } from 'lucide-react';
+import { readPlanIntent } from '@/lib/plan-intent';
+import { PhoneSetup } from '@/components/telephony/phone-setup';
+import { CallForwardingWizard } from '@/components/telephony/call-forwarding-wizard';
+import { TelephonyService } from '@/services/telephony.service';
+import type { BusinessPhoneNumber } from '@/types/telephony';
 
 const defaultHVACServices: ServiceItem[] = [
   { id: 'ac_repair', name: 'AC Repair', description: 'Diagnose and fix air conditioning breakdowns', enabled: true },
@@ -50,8 +57,13 @@ const steps = [
   { id: 2, name: 'Services', icon: Wrench },
   { id: 3, name: 'Service Area', icon: MapPin },
   { id: 4, name: 'Hours & Emergency', icon: Clock },
-  { id: 5, name: 'Review', icon: CheckCircle2 },
+  // Without this step onboarding used to "complete" with no phone line, leaving
+  // the AI receptionist unable to answer anything.
+  { id: 5, name: 'Phone Line', icon: PhoneCall },
+  { id: 6, name: 'Review', icon: CheckCircle2 },
 ];
+
+const TOTAL_STEPS = steps.length;
 
 export default function OnboardingPage() {
   const router = useRouter();
@@ -87,6 +99,10 @@ export default function OnboardingPage() {
   const [hours, setHours] = useState<DayHours[]>(defaultHours);
   const [emergencyOffered, setEmergencyOffered] = useState<boolean>(true);
   const [emergencyAvailability, setEmergencyAvailability] = useState<'24/7' | 'after_hours' | 'custom'>('24/7');
+
+  // Step 5: Phone line
+  const [connectedNumbers, setConnectedNumbers] = useState<BusinessPhoneNumber[]>([]);
+  const [emergencyTransferPhone, setEmergencyTransferPhone] = useState('');
 
   // Load existing business if already started
   useEffect(() => {
@@ -145,8 +161,11 @@ export default function OnboardingPage() {
             case 'hours':
               setCurrentStep(4);
               break;
-            case 'review':
+            case 'phone':
               setCurrentStep(5);
+              break;
+            case 'review':
+              setCurrentStep(6);
               break;
             default:
               setCurrentStep(1);
@@ -293,14 +312,51 @@ export default function OnboardingPage() {
     }
   };
 
-  // Handle Complete Setup (Step 5)
+  // Keep the review summary and forwarding wizard in sync with connected lines.
+  const refreshConnectedNumbers = useCallback(async () => {
+    try {
+      const list = await TelephonyService.getPhoneNumbers();
+      setConnectedNumbers(list);
+    } catch {
+      // Non-fatal: the PhoneSetup component surfaces its own errors.
+    }
+  }, []);
+
+  useEffect(() => {
+    if (currentStep === 5 || currentStep === 6) {
+      refreshConnectedNumbers();
+    }
+  }, [currentStep, refreshConnectedNumbers]);
+
+  // Handle Step 5 Submit (phone line + escalation number)
+  const handleStep5 = async () => {
+    setErrorMessage(null);
+    setIsLoading(true);
+
+    try {
+      await BusinessService.savePhoneSetup({
+        emergencyTransferPhone: emergencyTransferPhone.trim(),
+      });
+      setCurrentStep(6);
+    } catch (err: unknown) {
+      setErrorMessage(err instanceof Error ? err.message : 'Failed to save telephony setup');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Handle Complete Setup (final step)
   const handleCompleteSetup = async () => {
     setErrorMessage(null);
     setIsLoading(true);
 
     try {
       await BusinessService.completeOnboarding();
-      router.push('/app');
+
+      // If they picked a plan on the marketing site, land them on billing with
+      // checkout ready rather than dropping the selection they already made.
+      const intent = readPlanIntent();
+      router.push(intent ? '/app/billing?checkout=1' : '/app');
     } catch (err: unknown) {
       setErrorMessage(err instanceof Error ? err.message : 'Failed to complete setup');
     } finally {
@@ -336,7 +392,9 @@ export default function OnboardingPage() {
           </div>
 
           <div className="flex items-center gap-2">
-            <span className="text-xs text-slate-500 font-mono">Step {currentStep} of 5</span>
+            <span className="text-xs text-slate-500 font-mono">
+              Step {currentStep} of {TOTAL_STEPS}
+            </span>
             <Badge variant="outline" className="border-sky-200 text-sky-700 bg-sky-50 text-[11px]">
               {steps[currentStep - 1]?.name}
             </Badge>
@@ -345,7 +403,7 @@ export default function OnboardingPage() {
 
         {/* Stepper Indicator */}
         <nav aria-label="Progress" className="hidden sm:block">
-          <ol className="grid grid-cols-5 gap-2 text-xs font-medium">
+          <ol className="grid grid-cols-3 lg:grid-cols-6 gap-2 text-xs font-medium">
             {steps.map((step) => {
               const Icon = step.icon;
               const isDone = step.id < currentStep;
@@ -871,6 +929,102 @@ export default function OnboardingPage() {
                 isLoading={isLoading}
                 className="bg-sky-600 hover:bg-sky-700 text-white gap-2 font-medium px-6 shadow-xs"
               >
+                <span>Continue to Phone Line</span>
+                <ArrowRight className="h-4 w-4" />
+              </Button>
+            </CardFooter>
+          </Card>
+        )}
+
+        {/* STEP 5: PHONE LINE & ESCALATION */}
+        {currentStep === 5 && (
+          <Card className="bg-white border-slate-200/90 shadow-sm rounded-xl">
+            <CardHeader className="p-6 sm:p-8 border-b border-slate-100 space-y-1.5">
+              <div className="flex items-center gap-2 text-sky-700 text-xs font-semibold uppercase tracking-wider">
+                <PhoneCall className="h-4 w-4" />
+                Step 5 &bull; Phone Line
+              </div>
+              <CardTitle className="text-2xl font-bold text-slate-900">
+                Connect the line your AI will answer
+              </CardTitle>
+              <CardDescription className="text-sm text-slate-500">
+                Get a new local number, or keep the number you already advertise and forward it here.
+              </CardDescription>
+            </CardHeader>
+
+            <CardContent className="p-6 sm:p-8 space-y-6">
+              <PhoneSetup
+                compact
+                onConnected={(number) =>
+                  setConnectedNumbers((prev) =>
+                    prev.some((n) => n.phoneNumber === number.phoneNumber) ? prev : [...prev, number]
+                  )
+                }
+              />
+
+              <CallForwardingWizard
+                aiPhoneNumber={
+                  (connectedNumbers.find((n) => n.isPrimary) ?? connectedNumbers[0])?.phoneNumber
+                }
+              />
+
+              {/* Emergency escalation number */}
+              <div className="p-5 rounded-xl border border-slate-200/80 bg-slate-50/60 space-y-3">
+                <div className="flex items-start gap-3">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-rose-50 text-rose-600">
+                    <PhoneForwarded className="h-4 w-4" aria-hidden="true" />
+                  </div>
+                  <div className="space-y-0.5">
+                    <h4 className="text-sm font-bold text-slate-900">Emergency escalation number</h4>
+                    <p className="text-xs text-slate-500">
+                      If a caller reports a gas smell, carbon monoxide or an active leak, the AI
+                      transfers them straight to this number instead of booking an appointment.
+                    </p>
+                  </div>
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="emergency-transfer"
+                    className="mb-1 block text-xs font-semibold text-slate-700"
+                  >
+                    Where should emergencies go?
+                  </label>
+                  <Input
+                    id="emergency-transfer"
+                    type="tel"
+                    inputMode="tel"
+                    placeholder="(312) 555-0142"
+                    value={emergencyTransferPhone}
+                    onChange={(e) => setEmergencyTransferPhone(e.target.value)}
+                    className="max-w-xs text-sm"
+                  />
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    Usually your own cell. Leave blank to skip — the AI will then take a callback
+                    number instead of transferring.
+                  </p>
+                </div>
+              </div>
+            </CardContent>
+
+            <CardFooter className="p-6 bg-slate-50/70 border-t border-slate-100 flex items-center justify-between">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setCurrentStep(4)}
+                className="gap-2 border-slate-300 bg-white text-slate-700"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                <span>Back</span>
+              </Button>
+
+              <Button
+                type="button"
+                onClick={handleStep5}
+                disabled={isLoading}
+                isLoading={isLoading}
+                className="bg-sky-600 hover:bg-sky-700 text-white gap-2 font-medium px-6 shadow-xs"
+              >
                 <span>Continue to Review</span>
                 <ArrowRight className="h-4 w-4" />
               </Button>
@@ -878,13 +1032,13 @@ export default function OnboardingPage() {
           </Card>
         )}
 
-        {/* STEP 5: REVIEW & COMPLETE */}
-        {currentStep === 5 && (
+        {/* STEP 6: REVIEW & COMPLETE */}
+        {currentStep === 6 && (
           <Card className="bg-white border-slate-200/90 shadow-sm rounded-xl">
             <CardHeader className="p-6 sm:p-8 border-b border-slate-100 space-y-1.5">
               <div className="flex items-center gap-2 text-emerald-700 text-xs font-semibold uppercase tracking-wider">
                 <CheckCircle2 className="h-4 w-4" />
-                Step 5 &bull; Verification & Confirmation
+                Step 6 &bull; Verification & Confirmation
               </div>
               <CardTitle className="text-2xl font-bold text-slate-900">
                 Review your business setup
@@ -986,13 +1140,58 @@ export default function OnboardingPage() {
                   </p>
                 </div>
               </div>
+
+              {/* Section 4: Phone line — the one thing that determines whether the
+                  AI can actually answer a call, so it is called out explicitly. */}
+              <div
+                className={`p-4 rounded-xl border space-y-2 ${
+                  connectedNumbers.length > 0
+                    ? 'border-emerald-200 bg-emerald-50/50'
+                    : 'border-amber-200 bg-amber-50/70'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-2">
+                    <PhoneCall className="h-3.5 w-3.5 text-sky-600" aria-hidden="true" />
+                    AI Phone Line
+                  </h4>
+                  <button
+                    type="button"
+                    onClick={() => setCurrentStep(5)}
+                    className="text-xs text-sky-700 hover:underline font-medium"
+                  >
+                    Edit
+                  </button>
+                </div>
+
+                {connectedNumbers.length > 0 ? (
+                  <>
+                    <p className="font-mono text-sm font-bold text-slate-900">
+                      {(connectedNumbers.find((n) => n.isPrimary) ?? connectedNumbers[0]).phoneNumber}
+                    </p>
+                    <p className="text-xs text-emerald-700">
+                      Ready to answer calls
+                      {connectedNumbers.length > 1 && ` · ${connectedNumbers.length} lines connected`}
+                    </p>
+                  </>
+                ) : (
+                  <p className="text-xs font-medium text-amber-800">
+                    No line connected yet. You can finish setup now, but the AI will not answer any
+                    calls until you connect one.
+                  </p>
+                )}
+
+                <p className="text-xs text-slate-500">
+                  Emergency transfers: {emergencyTransferPhone.trim() || 'not set'}
+                </p>
+              </div>
             </CardContent>
 
             <CardFooter className="p-6 bg-slate-50/70 border-t border-slate-100 flex items-center justify-between">
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => setCurrentStep(4)}
+                onClick={() => setCurrentStep(5)}
                 className="gap-2 border-slate-300 bg-white text-slate-700"
               >
                 <ArrowLeft className="h-4 w-4" />
@@ -1018,9 +1217,7 @@ export default function OnboardingPage() {
       {/* Footer */}
       <footer className="max-w-4xl w-full mx-auto pt-8 border-t border-slate-200 mt-12 text-center sm:text-left flex flex-col sm:flex-row justify-between items-center gap-2 text-xs text-slate-500">
         <div>BlueCollar AI &copy; {new Date().getFullYear()} &bull; Professional HVAC Business Setup</div>
-        <div className="font-mono text-[11px] text-slate-500">
-          User: {user?.email} &bull; Milestone 3
-        </div>
+        <div className="font-mono text-[11px] text-slate-500">{user?.email}</div>
       </footer>
     </div>
   );

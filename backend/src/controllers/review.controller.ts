@@ -85,12 +85,15 @@ export class ReviewController {
     next: NextFunction
   ): Promise<void> {
     try {
+      if (!req.user) throw new AppError('Authentication required', 401);
       const { from, text } = req.body;
       if (!from || !text) {
         throw new AppError('from and text are required', 400);
       }
 
-      const result = await ReviewReputationService.handleCustomerRatingReply(from, text);
+      // businessId is derived from the session, never taken from the request.
+      const businessId = await ReviewController.getBusinessId(req.user.id);
+      const result = await ReviewReputationService.handleCustomerRatingReply(businessId, from, text);
       sendSuccess(res, { success: true, ...result }, 200);
     } catch (error) {
       next(error);

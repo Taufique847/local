@@ -1,8 +1,10 @@
 'use client';
 
 import React, { useState } from 'react';
+import Link from 'next/link';
 import { Check, Sparkles, ArrowRight, ShieldCheck, HelpCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { savePlanIntent, signupUrlForPlan } from '@/lib/plan-intent';
 
 interface PricingSectionProps {
   onOpenBookingModal: () => void;
@@ -129,13 +131,19 @@ export function PricingSection({ onOpenBookingModal }: PricingSectionProps) {
             </div>
 
             <div className="pt-8 space-y-2">
-              <a
-                href="/login"
+              {/* Carries the chosen plan through signup so checkout can be
+                  created once the account exists. These CTAs previously all
+                  pointed at /login and the selection was discarded. */}
+              <Link
+                href={signupUrlForPlan('starter', billingInterval)}
+                onClick={() => savePlanIntent('starter', billingInterval)}
                 className="w-full inline-flex items-center justify-center bg-slate-900 hover:bg-slate-800 text-white font-semibold py-2.5 rounded-xl text-xs shadow-xs transition-colors"
               >
-                Get Started
-              </a>
-              <p className="text-[10px] text-center text-slate-400">Instant setup • Cancel anytime</p>
+                Start free trial
+              </Link>
+              <p className="text-[10px] text-center text-slate-400">
+                No card required to start • Cancel anytime
+              </p>
             </div>
           </div>
 
@@ -218,14 +226,17 @@ export function PricingSection({ onOpenBookingModal }: PricingSectionProps) {
             </div>
 
             <div className="pt-8 space-y-2">
-              <a
-                href="/login"
+              <Link
+                href={signupUrlForPlan('pro', billingInterval)}
+                onClick={() => savePlanIntent('pro', billingInterval)}
                 className="w-full inline-flex items-center justify-center bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-xl text-xs shadow-md transition-colors"
               >
-                Subscribe to Pro
-                <ArrowRight className="w-3.5 h-3.5 ml-1.5" />
-              </a>
-              <p className="text-[10px] text-center text-slate-500">Most preferred by growing HVAC fleets</p>
+                Start free trial
+                <ArrowRight className="w-3.5 h-3.5 ml-1.5" aria-hidden="true" />
+              </Link>
+              <p className="text-[10px] text-center text-slate-500">
+                Most popular with growing fleets
+              </p>
             </div>
           </div>
 
@@ -304,12 +315,16 @@ export function PricingSection({ onOpenBookingModal }: PricingSectionProps) {
             </div>
 
             <div className="pt-8 space-y-2">
-              <a
-                href="/login"
+              {/* Enterprise is sales-assisted: multi-location routing and
+                  volume pricing need a conversation, so this opens the demo
+                  request form rather than self-serve checkout. */}
+              <button
+                type="button"
+                onClick={onOpenBookingModal}
                 className="w-full inline-flex items-center justify-center bg-slate-900 hover:bg-slate-800 text-white font-semibold py-2.5 rounded-xl text-xs shadow-xs transition-colors"
               >
-                Get Started with Enterprise
-              </a>
+                Talk to sales
+              </button>
               <p className="text-[10px] text-center text-slate-400">Custom volume billing available</p>
             </div>
           </div>

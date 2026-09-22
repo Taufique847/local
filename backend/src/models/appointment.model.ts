@@ -66,7 +66,7 @@ const appointmentSchema = new Schema<IAppointment>(
     },
     status: {
       type: String,
-      enum: ['scheduled', 'confirmed', 'rescheduled', 'in_progress', 'completed', 'cancelled', 'no_show'],
+      enum: ['scheduled', 'confirmed', 'rescheduled', 'en_route', 'arrived', 'in_progress', 'completed', 'cancelled', 'no_show'],
       default: 'scheduled',
       index: true,
     },
@@ -83,6 +83,12 @@ const appointmentSchema = new Schema<IAppointment>(
     address: {
       type: String,
       trim: true,
+    },
+    technicianId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Technician',
+      default: null,
+      index: true,
     },
     technicianName: {
       type: String,
@@ -107,6 +113,40 @@ const appointmentSchema = new Schema<IAppointment>(
       type: [rescheduleRecordSchema],
       default: [],
     },
+    checkIn: {
+      timestamp: { type: Date },
+      latitude: { type: Number },
+      longitude: { type: Number },
+      address: { type: String },
+    },
+    checkOut: {
+      timestamp: { type: Date },
+      latitude: { type: Number },
+      longitude: { type: Number },
+      address: { type: String },
+    },
+    checklist: [
+      {
+        item: { type: String, required: true },
+        completed: { type: Boolean, default: false },
+      },
+    ],
+    photos: [
+      {
+        url: { type: String, required: true },
+        caption: { type: String },
+        phase: { type: String, enum: ['before', 'after'], default: 'before' },
+        uploadedAt: { type: Date, default: Date.now },
+      },
+    ],
+    partsUsed: [
+      {
+        partName: { type: String, required: true },
+        quantity: { type: Number, default: 1 },
+        unitCost: { type: Number, default: 0 },
+        totalCost: { type: Number, default: 0 },
+      },
+    ],
     createdBy: {
       type: String,
       default: 'owner',

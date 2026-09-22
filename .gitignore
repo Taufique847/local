@@ -13,21 +13,36 @@ out/
 # Production build output
 dist/
 build/
+*.tsbuildinfo
 
-# Environment files
+# Environment files — never commit real credentials
 .env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+.env.*
+!.env.example
 backend/.env
+backend/.env.*
+!backend/.env.example
 frontend/.env.local
+frontend/.env.*
+!frontend/.env.example
+
+# Credential and session artifacts.
+# `backend/cookies.txt` was previously committed — it is a curl cookie jar and
+# can contain a live auth session cookie.
+cookies.txt
+*.cookies
+*.pem
+*.key
+*.p12
+*.pfx
 
 # Debug logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+logs/
+*.log
 
 # OS and Editor files
 .DS_Store

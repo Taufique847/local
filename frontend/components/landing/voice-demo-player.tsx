@@ -106,35 +106,36 @@ export function VoiceDemoPlayer({ onOpenBookingModal }: VoiceDemoPlayerProps) {
             <Radio className="w-5 h-5 animate-pulse" />
           </div>
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <h3 className="text-sm sm:text-base font-bold text-slate-900">
-                Live AI Receptionist Voice Demo
+                How an emergency call goes
               </h3>
-              <span className="text-[10px] px-2.5 py-0.5 rounded-full font-mono bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
-                280ms Latency
+              {/* Honest labelling. This component animates a scripted transcript;
+                  it does not stream audio and measures no latency, so it must not
+                  claim either. */}
+              <span className="text-[10px] px-2.5 py-0.5 rounded-full font-mono bg-slate-100 text-slate-600 border border-slate-200 font-semibold">
+                Scripted example
               </span>
             </div>
             <p className="text-xs text-slate-500">
-              Scenario: High-Urgency HVAC Leak Emergency on Sunday
+              A real Sunday emergency, turn by turn. Want to hear the actual voice?{' '}
+              <span className="font-semibold text-blue-600">Try the live mic demo.</span>
             </p>
           </div>
         </div>
 
-        {/* Latency Comparison Badge */}
+        {/* Outcome comparison rather than an invented latency figure. */}
         <div className="hidden lg:flex items-center gap-3 bg-slate-50 border border-slate-200 px-3.5 py-1.5 rounded-xl text-xs">
           <div className="text-right">
-            <span className="text-[10px] text-slate-400 block uppercase font-mono">
-              Old Phone Tree
-            </span>
-            <span className="font-semibold text-rose-600">3,800ms</span>
+            <span className="text-[10px] text-slate-400 block uppercase font-mono">Voicemail</span>
+            <span className="font-semibold text-rose-600">Caller hangs up</span>
           </div>
           <div className="w-px h-6 bg-slate-200" />
           <div className="text-left">
             <span className="text-[10px] text-slate-400 block uppercase font-mono">
               BlueCollar AI
             </span>
-            <span className="font-semibold text-emerald-700">&lt;280ms (Realtime)</span>
+            <span className="font-semibold text-emerald-700">Job booked</span>
           </div>
         </div>
       </div>
@@ -144,24 +145,31 @@ export function VoiceDemoPlayer({ onOpenBookingModal }: VoiceDemoPlayerProps) {
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <button
+              type="button"
               onClick={() => setIsPlaying(!isPlaying)}
-              className="w-11 h-11 rounded-full bg-blue-600 hover:bg-blue-700 text-white flex items-center justify-center shadow-sm transition-transform active:scale-95"
+              aria-label={isPlaying ? 'Pause transcript playback' : 'Play transcript'}
+              className="w-11 h-11 rounded-full bg-blue-600 hover:bg-blue-700 text-white flex items-center justify-center shadow-sm transition-transform active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2"
             >
-              {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5 ml-0.5" />}
+              {isPlaying ? (
+                <Pause className="w-5 h-5" aria-hidden="true" />
+              ) : (
+                <Play className="w-5 h-5 ml-0.5" aria-hidden="true" />
+              )}
             </button>
             <button
+              type="button"
               onClick={() => {
                 setCurrentTime(0);
                 setIsPlaying(true);
               }}
-              className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 transition-colors"
-              title="Restart Call"
+              aria-label="Restart from the beginning"
+              className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
             >
-              <RotateCcw className="w-4 h-4" />
+              <RotateCcw className="w-4 h-4" aria-hidden="true" />
             </button>
             <div>
               <p className="text-xs font-semibold text-slate-900 flex items-center gap-1.5">
-                {isPlaying ? 'Streaming G.711 μ-law Audio...' : 'Click Play to Listen'}
+                {isPlaying ? 'Playing transcript…' : 'Play the transcript'}
               </p>
               <p className="text-[11px] text-slate-500 font-mono">
                 00:{currentTime.toString().padStart(2, '0')} / 00:{totalDuration}
@@ -170,23 +178,50 @@ export function VoiceDemoPlayer({ onOpenBookingModal }: VoiceDemoPlayerProps) {
           </div>
 
           <div className="flex items-center gap-2">
+            {/* Named vendors must match what the backend actually calls:
+                Deepgram Nova-2 for speech recognition, Deepgram Aura for speech
+                synthesis, and OpenAI for reasoning and tool calling. The previous
+                label credited Cartesia, which is not used anywhere. */}
             <div className="flex items-center gap-1.5 text-[11px] text-slate-600 bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-xl">
-              <Volume2 className="w-3.5 h-3.5 text-blue-600" />
-              <span>Cartesia Sonic + Deepgram Nova-2</span>
+              <Volume2 className="w-3.5 h-3.5 text-blue-600" aria-hidden="true" />
+              <span>Deepgram Nova-2 + Aura</span>
             </div>
           </div>
         </div>
 
         {/* 36-Bar Dancing Waveform */}
+        {/* Scrubber. Given slider semantics and arrow-key support so it is not
+            mouse-only, which a plain clickable <div> was. */}
         <div
+          role="slider"
+          tabIndex={0}
+          aria-label="Transcript position"
+          aria-valuemin={0}
+          aria-valuemax={totalDuration}
+          aria-valuenow={currentTime}
+          aria-valuetext={`${currentTime} of ${totalDuration} seconds`}
           onClick={(e) => {
             const rect = e.currentTarget.getBoundingClientRect();
             const clickX = e.clientX - rect.left;
             const fraction = Math.max(0, Math.min(1, clickX / rect.width));
             setCurrentTime(Math.floor(fraction * totalDuration));
           }}
-          className="flex items-center justify-between gap-1 h-12 px-3 bg-slate-50 rounded-2xl border border-slate-200 cursor-pointer overflow-hidden group select-none"
-          title="Click to scrub audio timeline"
+          onKeyDown={(e) => {
+            if (e.key === 'ArrowRight') {
+              e.preventDefault();
+              setCurrentTime((t) => Math.min(totalDuration, t + 1));
+            } else if (e.key === 'ArrowLeft') {
+              e.preventDefault();
+              setCurrentTime((t) => Math.max(0, t - 1));
+            } else if (e.key === 'Home') {
+              e.preventDefault();
+              setCurrentTime(0);
+            } else if (e.key === 'End') {
+              e.preventDefault();
+              setCurrentTime(totalDuration);
+            }
+          }}
+          className="flex items-center justify-between gap-1 h-12 px-3 bg-slate-50 rounded-2xl border border-slate-200 cursor-pointer overflow-hidden group select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
         >
           {[
             30, 50, 75, 95, 60, 40, 80, 100, 85, 45, 65, 75, 90, 100, 70, 50,

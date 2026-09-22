@@ -249,7 +249,7 @@ export class ServiceService {
     const bId = new Types.ObjectId(businessId.toString());
 
     if (!['active', 'inactive'].includes(status)) {
-      throw new Error('Invalid status. Allowed: "active", "inactive"');
+      throw new AppError('Status must be either active or inactive.', 400);
     }
 
     return await Service.findOneAndUpdate(

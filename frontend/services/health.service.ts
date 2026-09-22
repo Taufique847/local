@@ -1,61 +1,33 @@
 import { HealthCheckResult, HealthResponse } from '../types';
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
+import { apiClient, toErrorMessage } from '../lib/api-client';
 
 export class HealthService {
+  /**
+   * Liveness probe with a measured round trip.
+   *
+   * Never throws: the whole point is to report unreachability as a state the UI
+   * can render.
+   */
   public static async checkHealth(): Promise<HealthCheckResult> {
     const startTime = performance.now();
     const timestamp = new Date().toLocaleTimeString();
 
     try {
-      const response = await fetch(`${API_BASE_URL}/api/health`, {
-        method: 'GET',
-        headers: {
-          'Accept': 'application/json',
-        },
-        cache: 'no-store',
-      });
-
-      const latencyMs = Math.round(performance.now() - startTime);
-
-      if (!response.ok) {
-        let errorMessage = `HTTP error ${response.status}: ${response.statusText}`;
-        try {
-          const errorJson = await response.json();
-          if (errorJson.message) {
-            errorMessage = errorJson.message;
-          }
-        } catch {
-          // fallback to status text
-        }
-
-        return {
-          status: 'disconnected',
-          data: null,
-          error: errorMessage,
-          latencyMs,
-          timestamp,
-        };
-      }
-
-      const data: HealthResponse = await response.json();
+      const data = await apiClient.get<HealthResponse>('/api/health');
 
       return {
         status: 'connected',
         data,
         error: null,
-        latencyMs,
+        latencyMs: Math.round(performance.now() - startTime),
         timestamp,
       };
     } catch (err: unknown) {
-      const latencyMs = Math.round(performance.now() - startTime);
-      const errorMessage = err instanceof Error ? err.message : 'Network error or backend unreachable';
-
       return {
         status: 'disconnected',
         data: null,
-        error: errorMessage,
-        latencyMs,
+        error: toErrorMessage(err, 'Network error or backend unreachable'),
+        latencyMs: Math.round(performance.now() - startTime),
         timestamp,
       };
     }

@@ -1,5 +1,6 @@
 import { Schema, model } from 'mongoose';
 import { IBusiness, IServiceItem, IDayHours } from '../types/business.types';
+import { defaultServicesForTrade } from '../config/trade-catalogs';
 
 const serviceItemSchema = new Schema<IServiceItem>(
   {
@@ -21,16 +22,7 @@ const dayHoursSchema = new Schema<IDayHours>(
   { _id: false }
 );
 
-const defaultHVACServices: IServiceItem[] = [
-  { id: 'ac_repair', name: 'AC Repair', description: 'Diagnose and fix air conditioning issues', enabled: true },
-  { id: 'ac_install', name: 'AC Installation', description: 'Install new energy-efficient AC systems', enabled: true },
-  { id: 'ac_tuneup', name: 'AC Maintenance & Tune-up', description: 'Seasonal AC tune-up and filter check', enabled: true },
-  { id: 'heating_repair', name: 'Heating Repair', description: 'Fix furnace and heat pump malfunctions', enabled: true },
-  { id: 'heating_install', name: 'Heating Installation', description: 'Install furnaces and heating units', enabled: true },
-  { id: 'ductwork', name: 'Ductwork & Airflow', description: 'Duct cleaning, repair, and sealing', enabled: false },
-  { id: 'indoor_air', name: 'Indoor Air Quality', description: 'Air purifiers, dehumidifiers, and UV lights', enabled: false },
-  { id: 'emergency_hvac', name: 'Emergency HVAC Service', description: '24/7 urgent heating and cooling service', enabled: true },
-];
+
 
 const defaultHours: IDayHours[] = [
   { day: 'Monday', isOpen: true, openTime: '08:00', closeTime: '18:00' },
@@ -84,7 +76,17 @@ const businessSchema = new Schema<IBusiness>(
     },
     services: {
       type: [serviceItemSchema],
-      default: defaultHVACServices,
+      /**
+       * Seeded from the business's own trade rather than always HVAC.
+       *
+       * Declared as a function so `this` is the document being created;
+       * `businessType` is defined earlier in this schema, so it already holds its
+       * value by the time this runs. BusinessService also passes services
+       * explicitly on create, so correctness does not rest on that ordering.
+       */
+      default: function (this: IBusiness) {
+        return defaultServicesForTrade(this?.businessType);
+      },
     },
     serviceArea: {
       primaryCity: { type: String, trim: true },
@@ -110,6 +112,10 @@ const businessSchema = new Schema<IBusiness>(
       },
       notes: { type: String, trim: true },
     },
+    googleReviewUrl: {
+      type: String,
+      trim: true,
+    },
     onboardingStatus: {
       type: String,
       enum: ['not_started', 'in_progress', 'completed'],
@@ -118,7 +124,7 @@ const businessSchema = new Schema<IBusiness>(
     },
     onboardingStep: {
       type: String,
-      enum: ['business', 'services', 'service_area', 'hours', 'review', 'completed'],
+      enum: ['business', 'services', 'service_area', 'hours', 'phone', 'review', 'completed'],
       default: 'business',
     },
   },

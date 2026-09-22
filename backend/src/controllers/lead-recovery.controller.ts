@@ -79,7 +79,10 @@ export class LeadRecoveryController {
         throw new AppError('from and text are required', 400);
       }
 
-      const result = await LeadRecoveryService.handleInboundCustomerReply(from, text);
+      // businessId is derived from the session, never taken from the request,
+      // so this manual/simulation endpoint cannot touch another tenant.
+      const businessId = await LeadRecoveryController.getBusinessId(req.user.id);
+      const result = await LeadRecoveryService.handleInboundCustomerReply(businessId, from, text);
       sendSuccess(res, { success: true, ...result }, 200);
     } catch (error) {
       next(error);

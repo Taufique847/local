@@ -1,28 +1,29 @@
 'use client';
 
 import React from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/auth-context';
 import { Business } from '@/types/business';
-import { 
-  Menu, 
-  LogOut, 
-  User as UserIcon, 
-  Building2, 
-  Sparkles,
-  ExternalLink
-} from 'lucide-react';
+import { SubscriptionData } from '@/services/billing.service';
+import { Menu, LogOut, Sparkles, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 
 interface HeaderProps {
   business: Business | null;
+  subscription?: SubscriptionData | null;
   onOpenMobileMenu: () => void;
   title?: string;
   subtitle?: string;
 }
 
-export function Header({ business, onOpenMobileMenu, title, subtitle }: HeaderProps) {
+export function Header({
+  business,
+  subscription,
+  onOpenMobileMenu,
+  title,
+  subtitle,
+}: HeaderProps) {
   const { user, logout } = useAuth();
   const router = useRouter();
 
@@ -49,6 +50,20 @@ export function Header({ business, onOpenMobileMenu, title, subtitle }: HeaderPr
         .toUpperCase()
         .substring(0, 2)
     : 'BO';
+
+  // Trial countdown, derived from the real subscription rather than assumed.
+  const trialDaysLeft =
+    subscription?.status === 'trialing' && subscription.trialEndsAt
+      ? Math.max(
+          0,
+          Math.ceil((new Date(subscription.trialEndsAt).getTime() - Date.now()) / 86_400_000)
+        )
+      : null;
+
+  const needsBilling =
+    subscription?.status === 'past_due' ||
+    subscription?.status === 'canceled' ||
+    subscription?.status === 'incomplete';
 
   return (
     <header className="sticky top-0 z-30 h-16 border-b border-slate-200 bg-white/95 backdrop-blur-sm px-4 sm:px-6 flex items-center justify-between transition-colors">
@@ -78,11 +93,8 @@ export function Header({ business, onOpenMobileMenu, title, subtitle }: HeaderPr
           ) : (
             <div className="flex items-center gap-2">
               <span className="font-semibold text-slate-900 text-sm sm:text-base tracking-tight">
-                {business?.name || 'HVAC Operations'}
+                {business?.name || 'Operations'}
               </span>
-              <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 text-[11px] py-0 px-2 font-medium">
-                Live
-              </Badge>
             </div>
           )}
         </div>
@@ -95,11 +107,28 @@ export function Header({ business, onOpenMobileMenu, title, subtitle }: HeaderPr
           <span>{todayFormatted}</span>
         </div>
 
-        {/* AI Employee Quick Status Indicator */}
-        <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-sky-50 border border-sky-100 text-sky-800 text-xs font-medium">
-          <Sparkles className="w-3.5 h-3.5 text-sky-600 animate-pulse" />
-          <span>AI Employee: Ready</span>
-        </div>
+        {/* Billing status. Replaces the previous hardcoded "AI Employee: Ready"
+            pill and the mock Dallas/Fort Worth branch switcher, neither of which
+            reflected any real state. */}
+        {needsBilling ? (
+          <Link
+            href="/app/billing"
+            className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold hover:bg-rose-100 transition-colors"
+          >
+            <AlertTriangle className="w-3.5 h-3.5" aria-hidden="true" />
+            <span>Billing needs attention</span>
+          </Link>
+        ) : trialDaysLeft !== null ? (
+          <Link
+            href="/app/billing"
+            className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-50 border border-blue-200 text-blue-700 text-xs font-semibold hover:bg-blue-100 transition-colors"
+          >
+            <Sparkles className="w-3.5 h-3.5" aria-hidden="true" />
+            <span>
+              Trial: {trialDaysLeft} {trialDaysLeft === 1 ? 'day' : 'days'} left
+            </span>
+          </Link>
+        ) : null}
 
         {/* User initials / Avatar */}
         <div className="flex items-center gap-2.5 pl-2 border-l border-slate-200">

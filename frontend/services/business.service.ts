@@ -1,21 +1,17 @@
 import { Business, ServiceItem, ServiceArea, DayHours, EmergencyService } from '../types/business';
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
+import { apiClient } from '../lib/api-client';
 
 export class BusinessService {
-  // Fetch current user's business
+  /**
+   * Current user's business, or null when they have not created one yet.
+   *
+   * Errors are swallowed because "no business yet" is the normal state during
+   * onboarding, and callers branch on null rather than catching.
+   */
   public static async getMyBusiness(): Promise<Business | null> {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/business/me`, {
-        method: 'GET',
-        headers: { 'Accept': 'application/json' },
-        credentials: 'include',
-        cache: 'no-store',
-      });
-
-      if (!res.ok) return null;
-      const data = await res.json();
-      return data.business || null;
+      const json = await apiClient.get<{ business?: Business }>('/api/business/me');
+      return json.business || null;
     } catch {
       return null;
     }
@@ -35,52 +31,24 @@ export class BusinessService {
       zip?: string;
     };
   }): Promise<Business> {
-    const res = await fetch(`${API_BASE_URL}/api/onboarding/business`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      },
-      credentials: 'include',
-      body: JSON.stringify(data),
-    });
-
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.message || 'Failed to save business profile');
+    const json = await apiClient.post<{ business: Business }>('/api/onboarding/business', data);
     return json.business;
   }
 
   // Step 2: Update services
   public static async updateServices(services: ServiceItem[]): Promise<Business> {
-    const res = await fetch(`${API_BASE_URL}/api/onboarding/services`, {
-      method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      },
-      credentials: 'include',
-      body: JSON.stringify({ services }),
+    const json = await apiClient.patch<{ business: Business }>('/api/onboarding/services', {
+      services,
     });
-
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.message || 'Failed to update services');
     return json.business;
   }
 
   // Step 3: Update service area
   public static async updateServiceArea(serviceArea: ServiceArea): Promise<Business> {
-    const res = await fetch(`${API_BASE_URL}/api/onboarding/service-area`, {
-      method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      },
-      credentials: 'include',
-      body: JSON.stringify(serviceArea),
-    });
-
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.message || 'Failed to update service area');
+    const json = await apiClient.patch<{ business: Business }>(
+      '/api/onboarding/service-area',
+      serviceArea
+    );
     return json.business;
   }
 
@@ -89,34 +57,30 @@ export class BusinessService {
     businessHours: DayHours[],
     emergencyService?: EmergencyService
   ): Promise<Business> {
-    const res = await fetch(`${API_BASE_URL}/api/onboarding/hours`, {
-      method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      },
-      credentials: 'include',
-      body: JSON.stringify({ businessHours, emergencyService }),
+    const json = await apiClient.patch<{ business: Business }>('/api/onboarding/hours', {
+      businessHours,
+      emergencyService,
     });
-
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.message || 'Failed to update business hours');
     return json.business;
   }
 
-  // Step 5: Complete onboarding
-  public static async completeOnboarding(): Promise<Business> {
-    const res = await fetch(`${API_BASE_URL}/api/onboarding/complete`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      },
-      credentials: 'include',
-    });
+  /**
+   * Step 5: telephony setup.
+   *
+   * The phone number itself is provisioned through TelephonyService; this call
+   * records the human escalation number and advances the onboarding step.
+   */
+  public static async savePhoneSetup(data: {
+    emergencyTransferPhone?: string;
+    googleReviewUrl?: string;
+  }): Promise<Business> {
+    const json = await apiClient.patch<{ business: Business }>('/api/onboarding/phone', data);
+    return json.business;
+  }
 
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.message || 'Failed to complete onboarding');
+  // Step 6: Complete onboarding
+  public static async completeOnboarding(): Promise<Business> {
+    const json = await apiClient.post<{ business: Business }>('/api/onboarding/complete');
     return json.business;
   }
 }

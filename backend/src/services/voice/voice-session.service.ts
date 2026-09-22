@@ -1,14 +1,19 @@
-import { IVoiceSession, VoiceSessionStatus } from '../../types/voice.types';
+import { IVoiceSession, VoiceSessionStatus, VoiceProviderName } from '../../types/voice.types';
 import { VoicePromptService } from './voice-prompt.service';
 import { VoiceProviderService } from './voice-provider.service';
 import { ToolRegistry } from '../ai-tools/tool.registry';
-import { Business } from '../../models/business.model';
 import { CallLog } from '../../models/call-log.model';
 import { Customer } from '../../models/customer.model';
-import { BusinessPhoneNumber } from '../../models/phone-number.model';
 import { AgentMemoryService } from '../agent-memory.service';
 import { ConversationIntelligenceService } from '../conversation-intelligence.service';
 import { LeadRecoveryService } from '../lead-recovery.service';
+import { resolveBusinessForInboundNumber } from '../business-resolver.service';
+import { BillingService } from '../billing.service';
+import { PolicyGuardrailsService } from '../policy-guardrails.service';
+import { Service } from '../../models/service.model';
+import { AppError } from '../../types';
+import { config } from '../../config/env';
+import { logger } from '../../utils/logger';
 
 export class VoiceSessionService {
   private static activeSessions: Map<string, IVoiceSession> = new Map();
@@ -21,19 +26,21 @@ export class VoiceSessionService {
     from: string;
     to: string;
     streamSid?: string;
+    /** True when Twilio already spoke the AI/recording notice. */
+    disclosurePlayed?: boolean;
   }): Promise<IVoiceSession> {
     ToolRegistry.initDefaultTools();
 
-    // Resolve business via incoming phone number
-    const phoneRecord = await BusinessPhoneNumber.findOne({ phoneNumber: params.to });
-    let business = phoneRecord ? await Business.findById(phoneRecord.businessId) : null;
-
+    // Resolve the tenant that owns the dialled number. Refuses to guess in a
+    // multi-tenant database rather than attributing the call to an arbitrary
+    // business, which the previous `Business.findOne()` fallback did.
+    const { business } = await resolveBusinessForInboundNumber(params.to);
     if (!business) {
-      business = await Business.findOne(); // Fallback for testing environments
+      throw new AppError(`Inbound number ${params.to} is not provisioned to any business`, 404);
     }
 
-    const businessId = business?._id?.toString() || '000000000000000000000000';
-    const businessName = business?.name || 'BlueCollar HVAC';
+    const businessId = business._id.toString();
+    const businessName = business.name || 'BlueCollar HVAC';
 
     // Match caller customer and assemble long-term memory context (M19)
     const memoryContext = await AgentMemoryService.assembleCustomerContext(businessId, params.from);
@@ -49,10 +56,13 @@ export class VoiceSessionService {
       toNumber: params.to,
       status: 'active',
       startedAt: new Date(),
-      provider: 'mock',
+      // Previously hardcoded to 'mock' regardless of VOICE_PROVIDER, which made
+      // call logs misreport which engine actually handled the call.
+      provider: (config.voiceProvider as VoiceProviderName) || 'mock',
       transcript: [],
       toolExecutions: [],
       customerId: customer?._id?.toString(),
+      disclosurePlayed: Boolean(params.disclosurePlayed),
     };
 
     this.activeSessions.set(params.callSid, session);
@@ -63,11 +73,45 @@ export class VoiceSessionService {
         : `${(business.address as any).street || ''}, ${(business.address as any).city || ''} ${(business.address as any).state || ''}`.trim()
       : undefined;
 
-    // Build system prompt with customer memory context and initialize provider
+    // Load the business's own policy so the assistant quotes authorised prices
+    // and obeys real booking limits instead of improvising them.
+    const policy = await PolicyGuardrailsService.getPolicy(businessId).catch(() => null);
+
+    const activeServices = await Service.find(
+      { businessId, active: true },
+      { name: 1 }
+    )
+      .limit(20)
+      .lean()
+      .catch(() => [] as any[]);
+
+    const openDays = (business.businessHours || []).filter((d: any) => d.isOpen);
+    const hoursSummary =
+      openDays.length > 0
+        ? `${openDays[0].day} to ${openDays[openDays.length - 1].day}, ${openDays[0].openTime} to ${openDays[0].closeTime}`
+        : undefined;
+
+    const transferPhone = policy?.emergencyTransferPhone || business.phone;
+
     const prompt = VoicePromptService.buildPrompt({
       businessName,
+      businessType: business.businessType,
       address: addressStr,
-      phone: business?.phone,
+      phone: business.phone,
+      timezone: business.timezone,
+      services: activeServices.map((s: any) => s.name).filter(Boolean),
+      businessHours: hoursSummary,
+      emergencyAvailability: business.emergencyService?.offered
+        ? business.emergencyService.availability
+        : 'not offered',
+      hasTransferNumber: Boolean(transferPhone),
+      diagnosticFee: policy?.diagnosticFee,
+      emergencyFee: policy?.emergencyFee,
+      minBookingNoticeHours: policy?.minBookingNoticeHours,
+      maxBookingHorizonDays: policy?.maxBookingHorizonDays,
+      requireDiagnosticBeforePricing: policy?.requireDiagnosticBeforePricing,
+      emergencyKeywords: policy?.emergencyKeywords,
+      prohibitedClaims: policy?.prohibitedClaims,
       callerContext: memoryContext.formattedContext,
     });
 
@@ -91,6 +135,17 @@ export class VoiceSessionService {
     session.status = 'ended';
     session.endedAt = new Date();
 
+    // Tear down provider resources FIRST. This closes the Deepgram STT
+    // WebSocket and flushes final usage counters onto the session, so the
+    // metrics persisted below are complete. Without this the STT socket and its
+    // keep-alive interval leaked for the lifetime of the process on every call.
+    try {
+      const provider = VoiceProviderService.getProvider();
+      await provider.closeSession(session);
+    } catch (err) {
+      logger.error('voice_provider_close_failed', { callSid, err });
+    }
+
     // Determine outcome
     if (!session.outcome) {
       if (session.appointmentId) {
@@ -109,6 +164,25 @@ export class VoiceSessionService {
     // Persist to CallLog (M15)
     try {
       const durationSeconds = Math.round((session.endedAt.getTime() - session.startedAt.getTime()) / 1000);
+
+      // Measured provider performance and spend for this call. Previously the
+      // dashboard displayed a hardcoded "<280ms" because nothing was recorded.
+      const latencies = session.usage?.turnLatenciesMs ?? [];
+      const metrics = {
+        avgTurnLatencyMs: latencies.length
+          ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length)
+          : undefined,
+        maxTurnLatencyMs: latencies.length ? Math.max(...latencies) : undefined,
+        turnCount: latencies.length,
+        sttAudioSeconds: Math.round(session.usage?.sttAudioSeconds ?? 0),
+        llmRequests: session.usage?.llmRequests ?? 0,
+        llmPromptTokens: session.usage?.llmPromptTokens ?? 0,
+        llmCompletionTokens: session.usage?.llmCompletionTokens ?? 0,
+        ttsCharacters: session.usage?.ttsCharacters ?? 0,
+        providerErrors: session.usage?.errors ?? 0,
+        endedReason: session.endedReason || reason || 'caller_hangup',
+      };
+
       const callLog = await CallLog.findOneAndUpdate(
         { providerCallSid: callSid },
         {
@@ -123,6 +197,7 @@ export class VoiceSessionService {
             toolExecutions: session.toolExecutions,
             outcome: session.outcome,
             aiHandled: true,
+            metrics,
             notes: session.transcript
               .filter((t) => t.role !== 'system')
               .map((t) => `${t.role}: ${t.text}`)
@@ -132,6 +207,14 @@ export class VoiceSessionService {
         },
         { new: true }
       );
+
+      // Meter the call against the plan allowance. Metering already existed but
+      // was never invoked from the voice path, so plans were never enforced.
+      if (durationSeconds > 0) {
+        await BillingService.recordVoiceUsage(session.businessId, durationSeconds).catch((e) =>
+          logger.error('record_voice_usage_failed', { callSid, err: e })
+        );
+      }
 
       // M19: Extract and learn customer preferences / equipment facts from transcript
       if (session.customerId && session.transcript.length > 0) {
@@ -149,14 +232,16 @@ export class VoiceSessionService {
         }
       }
 
-      // M20: Conversation QA & Intelligence evaluation
-      if (callLog) {
+      // M20: Conversation QA & Intelligence evaluation.
+      // Skipped for owner test calls so the quality scores describe real
+      // customer conversations only.
+      if (callLog && !callLog.isTest) {
         await ConversationIntelligenceService.evaluateCall(callLog._id)
           .catch((e) => console.error('Error evaluating Call QA:', e));
       }
 
       // M21: Autonomous Speed-to-Lead recovery for unbooked calls
-      if (callLog) {
+      if (callLog && !callLog.isTest) {
         await LeadRecoveryService.triggerRecoveryForCall(callLog._id)
           .catch((e) => console.error('Error triggering lead recovery:', e));
       }

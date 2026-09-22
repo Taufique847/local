@@ -5,6 +5,7 @@ import { Service } from '../models/service.model';
 import { Lead } from '../models/lead.model';
 import { Business } from '../models/business.model';
 import { AvailabilityService } from './availability.service';
+import { LockService, LockAcquisitionError } from './lock.service';
 import {
   CreateAppointmentInput,
   UpdateAppointmentInput,
@@ -17,9 +18,49 @@ import { AppError } from '../types';
 
 export class AppointmentService {
   /**
+   * Lock held while a booking for one business is checked and written.
+   *
+   * Scoped per business so unrelated tenants never wait on each other.
+   */
+  private static bookingLockKey(businessId: Types.ObjectId | string): string {
+    return `booking:${businessId.toString()}`;
+  }
+
+  /** Long enough to cover the conflict check plus the insert, short enough that a crash frees it quickly. */
+  private static readonly BOOKING_LOCK_TTL_MS = 10_000;
+
+  /**
    * Create a new appointment with double-booking check and lead synchronization.
+   *
+   * The conflict check and the insert run under a per-business lock. Without it
+   * the two were separate round trips, so two callers reaching the assistant at
+   * the same moment could both be told a slot was free and both be booked into
+   * it — the worst failure an answering service can have, because a technician
+   * gets promised to two addresses.
    */
   static async createAppointment(
+    businessId: Types.ObjectId | string,
+    input: CreateAppointmentInput,
+    createdBy: string = 'owner'
+  ): Promise<IAppointment> {
+    try {
+      return await LockService.withLock(
+        AppointmentService.bookingLockKey(businessId),
+        { ttlMs: AppointmentService.BOOKING_LOCK_TTL_MS, retries: 25, retryDelayMs: 120 },
+        () => AppointmentService.createAppointmentUnlocked(businessId, input, createdBy)
+      );
+    } catch (err) {
+      if (err instanceof LockAcquisitionError) {
+        throw new AppError(
+          'Another booking for this business is being processed. Please try again in a moment.',
+          409
+        );
+      }
+      throw err;
+    }
+  }
+
+  private static async createAppointmentUnlocked(
     businessId: Types.ObjectId | string,
     input: CreateAppointmentInput,
     createdBy: string = 'owner'
@@ -120,6 +161,29 @@ export class AppointmentService {
    * Reschedule an existing appointment with conflict checking and history tracking (M13).
    */
   static async rescheduleAppointment(
+    businessId: Types.ObjectId | string,
+    id: string,
+    input: RescheduleAppointmentInput
+  ): Promise<IAppointment> {
+    // Same race as creating: check-then-write against the same slot space.
+    try {
+      return await LockService.withLock(
+        AppointmentService.bookingLockKey(businessId),
+        { ttlMs: AppointmentService.BOOKING_LOCK_TTL_MS, retries: 25, retryDelayMs: 120 },
+        () => AppointmentService.rescheduleAppointmentUnlocked(businessId, id, input)
+      );
+    } catch (err) {
+      if (err instanceof LockAcquisitionError) {
+        throw new AppError(
+          'Another booking for this business is being processed. Please try again in a moment.',
+          409
+        );
+      }
+      throw err;
+    }
+  }
+
+  private static async rescheduleAppointmentUnlocked(
     businessId: Types.ObjectId | string,
     id: string,
     input: RescheduleAppointmentInput
@@ -418,12 +482,15 @@ export class AppointmentService {
     }
     await appointment.save();
 
-    // Trigger Area 4 Automated Review & Reputation Shielding funnel on completion
+    // Queue the CSAT survey rather than firing it instantly. The scheduler sends
+    // it a couple of hours later, inside TCPA quiet hours, which both complies
+    // with the rules and gets a much better response rate than texting the
+    // customer while the technician is still in the driveway.
     if (status === 'completed') {
       try {
         const { ReviewReputationService } = await import('./review-reputation.service');
-        ReviewReputationService.triggerPostServiceSurvey(appointment._id, { bypassQuietHours: true }).catch((err) => {
-          console.warn('Error triggering automated CSAT review survey:', err.message);
+        await ReviewReputationService.schedulePostServiceSurvey(appointment._id).catch((err) => {
+          console.warn('Error scheduling automated CSAT review survey:', err.message);
         });
       } catch (err: any) {
         console.warn('Error importing ReviewReputationService:', err.message);

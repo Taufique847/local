@@ -1,9 +1,7 @@
 import { Customer, CustomerInput, PaginatedCustomersResponse } from '../types/customer';
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
+import { apiClient } from '../lib/api-client';
 
 export class CustomerService {
-  // Get paginated customers with optional search & status filter
   public static async getCustomers(params?: {
     page?: number;
     limit?: number;
@@ -16,140 +14,80 @@ export class CustomerService {
     if (params?.search) searchParams.set('search', params.search);
     if (params?.status && params.status !== 'all') searchParams.set('status', params.status);
 
-    const res = await fetch(`${API_BASE_URL}/api/customers?${searchParams.toString()}`, {
-      method: 'GET',
-      headers: { 'Accept': 'application/json' },
-      credentials: 'include',
-      cache: 'no-store',
-    });
-
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.message || 'Failed to fetch customers');
-    return json;
+    return apiClient.get<PaginatedCustomersResponse>(`/api/customers?${searchParams.toString()}`);
   }
 
-  // Get customer statistics for dashboard
+  /** Feeds a KPI tile, so it degrades to zeros rather than breaking the page. */
   public static async getCustomerStats(): Promise<{ total: number; active: number }> {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/customers/stats`, {
-        method: 'GET',
-        headers: { 'Accept': 'application/json' },
-        credentials: 'include',
-        cache: 'no-store',
-      });
-
-      if (!res.ok) return { total: 0, active: 0 };
-      const json = await res.json();
+      const json = await apiClient.get<{ stats?: { total: number; active: number } }>(
+        '/api/customers/stats'
+      );
       return json.stats || { total: 0, active: 0 };
     } catch {
       return { total: 0, active: 0 };
     }
   }
 
-  // Get single customer
   public static async getCustomerById(id: string): Promise<Customer> {
-    const res = await fetch(`${API_BASE_URL}/api/customers/${id}`, {
-      method: 'GET',
-      headers: { 'Accept': 'application/json' },
-      credentials: 'include',
-      cache: 'no-store',
-    });
-
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.message || 'Customer not found');
+    const json = await apiClient.get<{ customer: Customer }>(`/api/customers/${id}`);
     return json.customer;
   }
 
-  // Create customer
   public static async createCustomer(input: CustomerInput): Promise<Customer> {
-    const res = await fetch(`${API_BASE_URL}/api/customers`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      },
-      credentials: 'include',
-      body: JSON.stringify(input),
-    });
-
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.message || 'Failed to create customer');
+    const json = await apiClient.post<{ customer: Customer }>('/api/customers', input);
     return json.customer;
   }
 
-  // Update customer
-  public static async updateCustomer(id: string, input: Partial<CustomerInput>): Promise<Customer> {
-    const res = await fetch(`${API_BASE_URL}/api/customers/${id}`, {
-      method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      },
-      credentials: 'include',
-      body: JSON.stringify(input),
-    });
-
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.message || 'Failed to update customer');
+  public static async updateCustomer(
+    id: string,
+    input: Partial<CustomerInput>
+  ): Promise<Customer> {
+    const json = await apiClient.patch<{ customer: Customer }>(`/api/customers/${id}`, input);
     return json.customer;
   }
 
-  // Delete customer
   public static async deleteCustomer(id: string): Promise<void> {
-    const res = await fetch(`${API_BASE_URL}/api/customers/${id}`, {
-      method: 'DELETE',
-      headers: { 'Accept': 'application/json' },
-      credentials: 'include',
-    });
-
-    if (!res.ok) {
-      const json = await res.json().catch(() => ({}));
-      throw new Error(json.message || 'Failed to delete customer');
-    }
+    await apiClient.delete<{ success: boolean }>(`/api/customers/${id}`);
   }
 
-  // M16/M24: Unified Customer 360 View
+  /** Unified profile: appointments, invoices, calls and memories in one call. */
   public static async getCustomer360(id: string): Promise<any> {
-    const res = await fetch(`${API_BASE_URL}/api/customers/${id}/360`, {
-      method: 'GET',
-      headers: { 'Accept': 'application/json' },
-      credentials: 'include',
-      cache: 'no-store',
-    });
-
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.message || 'Failed to fetch customer 360 profile');
-    return json;
+    return apiClient.get<any>(`/api/customers/${id}/360`);
   }
 
-  // Update Customer Tags (VIP, Commercial, etc.)
   public static async updateTags(id: string, tags: string[]): Promise<string[]> {
-    const res = await fetch(`${API_BASE_URL}/api/customers/${id}/tags`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      },
-      credentials: 'include',
-      body: JSON.stringify({ tags }),
-    });
-
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.message || 'Failed to update tags');
+    const json = await apiClient.put<{ tags?: string[] }>(`/api/customers/${id}/tags`, { tags });
     return json.tags || [];
   }
 
-  // M19: Get Customer Long-term Memories
+  /**
+   * Facts the assistant has learned about this customer.
+   *
+   * Returns an empty list on failure: this is supplementary context in a drawer,
+   * not something worth failing the whole profile over.
+   */
   public static async getCustomerMemories(id: string): Promise<any[]> {
-    const res = await fetch(`${API_BASE_URL}/api/customers/${id}/memories`, {
-      method: 'GET',
-      headers: { 'Accept': 'application/json' },
-      credentials: 'include',
-      cache: 'no-store',
-    });
+    try {
+      const json = await apiClient.get<{ memories?: any[] }>(`/api/customers/${id}/memories`);
+      return json.memories || [];
+    } catch {
+      return [];
+    }
+  }
 
-    const json = await res.json();
-    if (!res.ok) return [];
-    return json.memories || [];
+  /**
+   * Permanently erases a customer's personal data.
+   *
+   * Used to satisfy a deletion request. Financial records are retained in
+   * anonymised form because a business must keep them; see the backend for what
+   * is kept versus scrubbed.
+   */
+  public static async erasePersonalData(
+    id: string
+  ): Promise<{ appointmentsAnonymised: number; invoicesAnonymised: number }> {
+    return apiClient.post<{ appointmentsAnonymised: number; invoicesAnonymised: number }>(
+      `/api/customers/${id}/erase`
+    );
   }
 }

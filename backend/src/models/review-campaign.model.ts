@@ -1,6 +1,8 @@
 import mongoose, { Document, Schema, Types } from 'mongoose';
 
 export type ReviewCampaignStatus =
+  /** Queued for a delayed send; picked up by the scheduler. */
+  | 'pending'
   | 'survey_sent'
   | 'positive_redirected'
   | 'negative_shielded'
@@ -17,7 +19,16 @@ export interface IReviewCampaign extends Document {
   rating?: number; // 1 to 5
   feedbackText?: string;
   status: ReviewCampaignStatus;
-  surveySentAt: Date;
+  /**
+   * When the survey should go out. A survey sent the instant a technician marks
+   * a job complete arrives while they are still on the driveway; a short delay
+   * produces far better response rates.
+   */
+  scheduledAt?: Date;
+  /** Undefined until the survey has actually been dispatched. */
+  surveySentAt?: Date;
+  /** Number of send attempts, so a permanently failing survey is abandoned. */
+  surveyAttempts: number;
   respondedAt?: Date;
   googleReviewUrl?: string;
   isShielded: boolean;
@@ -42,7 +53,9 @@ const ReviewCampaignSchema = new Schema<IReviewCampaign>(
       type: Schema.Types.ObjectId,
       ref: 'Appointment',
       required: true,
-      index: true,
+      // No `index: true` here — the unique index is declared below via
+      // schema.index(). Declaring both makes Mongoose build two indexes on the
+      // same key and log a duplicate-index warning on every boot.
     },
     customerId: {
       type: Schema.Types.ObjectId,
@@ -78,13 +91,20 @@ const ReviewCampaignSchema = new Schema<IReviewCampaign>(
     },
     status: {
       type: String,
-      enum: ['survey_sent', 'positive_redirected', 'negative_shielded', 'resolved'],
-      default: 'survey_sent',
+      enum: ['pending', 'survey_sent', 'positive_redirected', 'negative_shielded', 'resolved'],
+      default: 'pending',
+      index: true,
+    },
+    scheduledAt: {
+      type: Date,
       index: true,
     },
     surveySentAt: {
       type: Date,
-      default: Date.now,
+    },
+    surveyAttempts: {
+      type: Number,
+      default: 0,
     },
     respondedAt: {
       type: Date,
@@ -125,6 +145,14 @@ const ReviewCampaignSchema = new Schema<IReviewCampaign>(
     timestamps: true,
   }
 );
+
+// One campaign per appointment: makes the scheduler idempotent and prevents a
+// customer being surveyed twice for the same job.
+ReviewCampaignSchema.index({ appointmentId: 1 }, { unique: true });
+// Drives the scheduler's "surveys due now" query.
+ReviewCampaignSchema.index({ status: 1, scheduledAt: 1 });
+// Drives the negative-feedback SLA breach sweep.
+ReviewCampaignSchema.index({ status: 1, slaBreached: 1, slaDeadlineAt: 1 });
 
 export const ReviewCampaign = mongoose.model<IReviewCampaign>(
   'ReviewCampaign',

@@ -1,5 +1,7 @@
 import { Types } from 'mongoose';
 import { CallLog } from '../models/call-log.model';
+import { CallCostService, CallCostBreakdown } from './call-cost.service';
+import { AppError } from '../types';
 
 export interface CallAnalyticsSummary {
   totalCalls: number;
@@ -37,6 +39,9 @@ export class CallAnalyticsService {
 
     const matchQuery = {
       businessId: bId,
+      // Owner test calls are excluded so trying the assistant does not move the
+      // business's own answer rate, booking rate or sentiment mix.
+      isTest: { $ne: true },
       startedAt: { $gte: startDate },
     };
 
@@ -167,6 +172,10 @@ export class CallAnalyticsService {
     startedAt: Date;
     durationSeconds: number;
     outcome?: string;
+    summary?: string;
+    sentiment?: string;
+    isTest: boolean;
+    cost: CallCostBreakdown;
     transcript: any[];
     toolExecutions: any[];
     customer?: any;
@@ -176,9 +185,13 @@ export class CallAnalyticsService {
     const call = await CallLog.findOne({ _id: callId, businessId })
       .populate('customerId', 'firstName lastName phone email address')
       .populate('leadId', 'title status urgency serviceType')
-      .populate('appointmentId', 'title startAt endAt status');
+      .populate({
+        path: 'appointmentId',
+        select: 'title startAt endAt status serviceAddress technicianId',
+        populate: { path: 'technicianId', select: 'name phone' },
+      });
 
-    if (!call) throw new Error('Call record not found');
+    if (!call) throw new AppError('Call record not found', 404);
 
     return {
       callId: call._id.toString(),
@@ -186,6 +199,16 @@ export class CallAnalyticsService {
       startedAt: call.startedAt,
       durationSeconds: call.durationSeconds || 0,
       outcome: call.outcome,
+      // The detail drawer rendered a hardcoded example summary because this was
+      // never returned, so `transcriptData.summary` was always undefined.
+      summary: call.summary,
+      sentiment: call.sentiment,
+      isTest: Boolean(call.isTest),
+      // Estimated provider spend for this specific call.
+      cost: CallCostService.costForCall({
+        durationSeconds: call.durationSeconds,
+        metrics: call.metrics,
+      }),
       transcript: call.transcript || [],
       toolExecutions: call.toolExecutions || [],
       customer: call.customerId,

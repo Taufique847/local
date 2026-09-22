@@ -4,7 +4,19 @@ export type BusinessType = 'HVAC' | 'Plumbing' | 'Electrical' | 'Roofing' | 'Pes
 
 export type OnboardingStatus = 'not_started' | 'in_progress' | 'completed';
 
-export type OnboardingStep = 'business' | 'services' | 'service_area' | 'hours' | 'review' | 'completed';
+/**
+ * `phone` was added because onboarding previously finished without ever
+ * provisioning a phone number — leaving the product's core feature, the AI
+ * receptionist, unable to answer anything.
+ */
+export type OnboardingStep =
+  | 'business'
+  | 'services'
+  | 'service_area'
+  | 'hours'
+  | 'phone'
+  | 'review'
+  | 'completed';
 
 export interface IServiceItem {
   id: string;
@@ -55,6 +67,11 @@ export interface IBusiness extends Document {
   businessHours: IDayHours[];
   timezone?: string;
   emergencyService: IEmergencyService;
+  /**
+   * Full Google "write a review" URL for this business, including its real
+   * Place ID. Required because a slug-based URL is not a valid review link.
+   */
+  googleReviewUrl?: string;
   onboardingStatus: OnboardingStatus;
   onboardingStep: OnboardingStep;
   createdAt: Date;
@@ -75,6 +92,7 @@ export interface BusinessDTO {
   businessHours: IDayHours[];
   timezone?: string;
   emergencyService: IEmergencyService;
+  googleReviewUrl?: string;
   onboardingStatus: OnboardingStatus;
   onboardingStep: OnboardingStep;
   createdAt: string | Date;

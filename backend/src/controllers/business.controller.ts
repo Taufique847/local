@@ -80,6 +80,21 @@ export class BusinessController {
     }
   }
 
+  // PATCH /api/onboarding/phone
+  public static async completePhoneStep(
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      if (!req.user) throw new AppError('Authentication required', 401);
+      const business = await BusinessService.completePhoneStep(req.user.id, req.body);
+      sendSuccess(res, { success: true, message: 'Telephony setup saved', business }, 200);
+    } catch (error) {
+      next(error);
+    }
+  }
+
   // PATCH /api/onboarding/hours
   public static async updateHours(
     req: AuthenticatedRequest,
