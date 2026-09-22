@@ -95,8 +95,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Fail if credential files are tracked
-        # A real `.env` or a curl cookie jar in git history is how auth tokens
-        # leak. `backend/cookies.txt` was committed at one point.
+        # A real `.env` or a populated cookie jar in the repo is how auth tokens
+        # leak. This fires on the filename, before anyone has to judge whether a
+        # given file happens to hold a live session — which is the judgement call
+        # that gets skipped under time pressure.
         run: |
           set -e
           offenders=$(git ls-files \

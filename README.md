@@ -14,10 +14,11 @@ Be aware of the distinction below — it is the difference between a demo and a 
 
 | Area | Detail |
 |---|---|
-| **Auth** | Signup/login, bcrypt (cost 12), httpOnly + `secure` + `sameSite` JWT cookie, per-request active-user check |
-| **Multi-tenancy** | Every query scoped by `businessId`, derived server-side from the session — never from the request body |
+| **Auth** | Signup/login, bcrypt (cost 12), httpOnly + `secure` + `sameSite` cookies. Short-lived access token plus rotating refresh token with reuse-as-theft detection; `tokenVersion` makes an issued access token revocable. Email verification and password reset, both single-use and expiring |
+| **Access control** | Two independent role axes. `role` ('user' \| 'admin') gates platform-operator endpoints; `businessRole` ('owner' \| 'dispatcher' \| 'technician') gates tenant endpoints. Staff join by emailed invitation; billing and team management are owner-only; a technician sees only their own jobs. Role and membership are read from the database per request, so a demotion applies immediately rather than at token expiry |
+| **Multi-tenancy** | Every query scoped by `businessId`, resolved server-side from the session by workspace **membership** — never from the request body |
 | **Telephony** | Real Twilio: number search, provisioning, TwiML, bidirectional Media Streams WebSocket, signature verification on every webhook |
-| **AI voice engine** | Deepgram Nova-2 streaming STT → OpenAI tool-calling LLM → Deepgram Aura TTS, as 8 kHz μ-law frames. Local VAD barge-in with Twilio `clear`. Per-call latency + token + audio metrics recorded |
+| **AI voice engine** | Deepgram Nova-2 streaming STT → tool-calling LLM → Deepgram Aura TTS, as 8 kHz μ-law frames. The LLM is Azure OpenAI or public OpenAI, interchangeable via `LLM_PRIMARY`/`LLM_FALLBACK`, with automatic failover bounded by a wall-clock budget. Local VAD barge-in with Twilio `clear`. Per-call latency + token + audio metrics recorded. The media-stream WebSocket is authorised by a single-use signed token, because Twilio does not sign upgrades |
 | **AI tools** | 7 tools the model can call: customer lookup, availability, lead create/update, book appointment, send SMS, transfer call, knowledge-base search — all with policy guardrails |
 | **Guardrails** | Per-business booking notice/horizon limits, authorised diagnostic + emergency fees, emergency keyword list, prohibited claims, all injected into the system prompt |
 | **CRM & ops** | Customers (with 360 timeline + agent memory), leads, services, appointments, availability, technicians, service zones |
@@ -25,7 +26,7 @@ Be aware of the distinction below — it is the difference between a demo and a 
 | **Reputation** | Delayed post-service CSAT survey; 4–5★ → your Google link, 1–3★ → kept private and escalated to you with a 24h SLA |
 | **Estimates & invoices** | Line items, tax, e-signature, public share-token portal, Stripe Checkout for card payment |
 | **Billing** | Real Stripe subscriptions, free trial, usage metering, plan enforcement on minutes and phone lines |
-| **Background jobs** | In-process cron: drip follow-ups, review surveys, SLA sweeps, trial expiry |
+| **Background jobs** | In-process cron: drip follow-ups, review surveys, SLA sweeps, trial expiry, data retention. Each run takes a MongoDB-backed distributed lock, so extra replicas do not double-send SMS |
 | **Field worker PWA** | Mobile job list, check-in, photo capture, GPS |
 
 ### Not built (and the UI says so)
@@ -35,14 +36,15 @@ Be aware of the distinction below — it is the difference between a demo and a 
 
 ### Known gaps you should plan for
 
-- **No automated tests.** Type checking and builds pass; behaviour is unverified. The security-sensitive paths (portal share tokens, Stripe webhook signature, tenant scoping, payment application) deserve tests first.
-- **The voice pipeline has not been exercised against live provider credentials.** It compiles and the protocol work is correct, but end-to-end audio has not been confirmed on a real call.
-- **Voice is single-instance.** `VoiceStreamHandler` and `VoiceSessionService` hold per-call state in process memory, so the backend cannot be horizontally scaled while serving calls.
-- **The scheduler must run on exactly one replica.** Enforced by configuration (`ENABLE_SCHEDULER`), not by a distributed lock. Two schedulers will double-send SMS.
-- **No refresh tokens, token revocation, RBAC, or email verification.** A logged-in user of a business is effectively an owner, and logout does not invalidate an issued token server-side.
-- **No call-recording disclosure in the greeting.** Several US states require two-party consent. Add a disclosure before recording in those markets.
-- **No data retention or deletion policy.** Transcripts are kept indefinitely.
-- **`backend/cookies.txt` was committed at one point.** It has been removed from the index, but it remains in git history — rewrite history or rotate anything it touched.
+- **The voice pipeline has not been exercised against live provider credentials.** It compiles, the protocol work is correct, and provider readiness is reported by `/api/health/ready` — but end-to-end audio has never been confirmed on a real call. This is the single most important unverified thing in the project.
+- **Voice is single-instance.** `VoiceStreamHandler` and `VoiceSessionService` hold per-call state in process memory, so the backend cannot be horizontally scaled while serving calls. The media-stream token's replay guard is in-memory for the same reason.
+- **No call recording is stored.** `CallLog.recordingUrl` exists on the model but is never written. Transcripts are real; audio is not captured, so there is nothing to produce if a customer or a regulator asks for it.
+- **The post-call "AI summary" is not AI.** `conversation-intelligence.service.ts` selects a canned sentence based on the call outcome. The sentiment and flagging heuristics around it are real; the prose is a template.
+- **No data retention sweep is on by default.** `DATA_RETENTION_DAYS` defaults to `0` (off), deliberately, so a first boot of this build cannot start deleting an operator's existing records. Transcripts are kept indefinitely until it is set.
+- **Email is unexercised.** Verification, password reset and staff invitations all build and are covered by tests with the sender stubbed, but no message has ever been sent through Resend — `EMAIL_API_KEY` has never been configured.
+- **Billing runs in simulation mode** unless `STRIPE_SECRET_KEY` is set. No real card payment has been taken.
+- **The worker PWA page has no client-side auth guard.** `/worker` renders for an unauthenticated visitor and then fails its API calls. The data is not exposed — every `/api/worker/*` route is authenticated — but the page should redirect instead of breaking.
+- **Tests cover the dangerous paths, not the product.** 107 tests over tenancy, webhook signatures, RBAC and the auth token lifecycles. Business logic, the frontend, and the voice pipeline are not covered.
 
 ---
 
