@@ -42,6 +42,62 @@ export const loginSchema = z.object({
   password: z.string().min(1, 'Password is required').max(72),
 });
 
+/**
+ * Password recovery.
+ *
+ * The password rules are copied from signupSchema rather than shared, because a
+ * reset must never become the weaker of the two paths by accident. Token length
+ * is bounded so an oversized body is rejected before any hashing happens.
+ */
+const emailedToken = z
+  .string()
+  .trim()
+  .min(20, 'This link is not valid')
+  .max(512, 'This link is not valid');
+
+const newPassword = z
+  .string()
+  .min(8, 'Password must be at least 8 characters long')
+  .max(72, 'Password must be 72 characters or fewer');
+
+export const forgotPasswordSchema = z.object({
+  email: z.string().trim().toLowerCase().email('Please provide a valid email address').max(254),
+});
+
+export const resetPasswordSchema = z.object({
+  token: emailedToken,
+  password: newPassword,
+});
+
+// ---------------------------------------------------------------------------
+// Team & invitations
+// ---------------------------------------------------------------------------
+
+export const createInviteSchema = z.object({
+  email: z.string().trim().toLowerCase().email('Please provide a valid email address').max(254),
+  name: trimmed(100).optional(),
+  // 'owner' is accepted by the schema and rejected by the service with an
+  // explanation, which is a clearer answer than "invalid enum value".
+  businessRole: z.enum(['owner', 'dispatcher', 'technician']),
+  technicianId: objectId.optional(),
+});
+
+export const acceptInviteSchema = z.object({
+  token: emailedToken,
+  name: trimmed(100).min(2, 'Please enter your full name'),
+  password: newPassword,
+});
+
+/** At least one field must be present, or the request is a no-op. */
+export const updateMemberSchema = z
+  .object({
+    businessRole: z.enum(['owner', 'dispatcher', 'technician']).optional(),
+    isActive: z.boolean().optional(),
+  })
+  .refine((data) => Object.keys(data).length > 0, {
+    message: 'Provide a role or an active flag to change',
+  });
+
 // ---------------------------------------------------------------------------
 // Invoices & estimates
 // ---------------------------------------------------------------------------

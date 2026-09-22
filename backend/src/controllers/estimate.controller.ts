@@ -1,17 +1,22 @@
 import { Request, Response, NextFunction } from 'express';
 import { EstimateService } from '../services/estimate.service';
-import { BusinessService } from '../services/business.service';
+import { BusinessContextService } from '../services/business-context.service';
 import { AppError } from '../types';
 
 export class EstimateController {
+  /**
+   * Resolves the caller's workspace by MEMBERSHIP.
+   *
+   * `req.businessId` is set by `attachBusinessContext`; the fallback covers
+   * routes that have not been given that middleware yet. The previous version
+   * checked `req.business` and `req.user.businessId`, neither of which was ever
+   * populated, then fell through to an owner-only lookup.
+   */
   private static async getBusinessId(req: any): Promise<string> {
-    if (req.business?._id) return req.business._id.toString();
-    if (req.user?.businessId) return req.user.businessId.toString();
-    if (req.user?.id) {
-      const business = await BusinessService.getBusinessByOwnerId(req.user.id);
-      if (business) return business.id;
-    }
-    throw new AppError('Business workspace not found', 400);
+    if (req.businessId) return req.businessId as string;
+    if (!req.user?.id) throw new AppError('Authentication required', 401);
+    const context = await BusinessContextService.resolve(req.user.id);
+    return context.businessId;
   }
 
   public static async createEstimate(req: any, res: Response, next: NextFunction) {

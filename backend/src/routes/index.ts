@@ -24,12 +24,14 @@ import { workerRoutes } from './worker.routes';
 import { portalRoutes } from './portal.routes';
 import demoRequestRoutes from './demo-request.routes';
 import dashboardRoutes from './dashboard.routes';
+import teamRoutes from './team.routes';
 
 const apiRouter = Router();
 
 // Mount routes
 apiRouter.use('/health', healthRoutes);
 apiRouter.use('/auth', authRoutes);
+apiRouter.use('/team', teamRoutes);
 apiRouter.use('/business', businessRoutes);
 apiRouter.use('/onboarding', onboardingRoutes);
 apiRouter.use('/dashboard', dashboardRoutes);

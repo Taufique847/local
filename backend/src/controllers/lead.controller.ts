@@ -1,18 +1,22 @@
 import { Response, NextFunction } from 'express';
 import { LeadService } from '../services/lead.service';
-import { BusinessService } from '../services/business.service';
+import { BusinessContextService } from '../services/business-context.service';
 import { AuthenticatedRequest } from '../types/auth.types';
 import { sendSuccess } from '../utils/response';
 import { AppError } from '../types';
 
 export class LeadController {
   // Helper to ensure authenticated user has an active business
+  /**
+   * Resolves the caller's workspace by MEMBERSHIP, not by ownership.
+   *
+   * This used to be `getBusinessByOwnerId`, which answers "which business does
+   * this person own" — correct for owners and empty for everyone else. Staff
+   * accounts would have been told to complete a business profile they do not own.
+   */
   private static async getBusinessId(userId: string): Promise<string> {
-    const business = await BusinessService.getBusinessByOwnerId(userId);
-    if (!business) {
-      throw new AppError('Please complete your business profile setup first', 400);
-    }
-    return business.id;
+    const context = await BusinessContextService.resolve(userId);
+    return context.businessId;
   }
 
   // GET /api/leads

@@ -27,8 +27,17 @@ export class WorkerService {
    * dispatcher could assign jobs to them, and the assistant could promise a
    * caller that a technician who does not exist was on the way.
    */
-  public static async getTechnicians(businessId: Types.ObjectId | string) {
-    return Technician.find({ businessId, active: true });
+  public static async getTechnicians(
+    businessId: Types.ObjectId | string,
+    options: { onlyId?: string | null } = {}
+  ) {
+    const query: any = { businessId, active: true };
+    // Used by technician accounts, which get only their own record.
+    if (options.onlyId) {
+      if (!Types.ObjectId.isValid(options.onlyId)) return [];
+      query._id = options.onlyId;
+    }
+    return Technician.find(query);
   }
 
   // Get active schedule for Field Worker PWA
@@ -73,13 +82,32 @@ export class WorkerService {
   private static async findOwnedAppointment(
     businessId: Types.ObjectId | string,
     appointmentId: string,
-    populate = false
+    populate = false,
+    scope: { technicianId?: string | null } = {}
   ) {
     if (!Types.ObjectId.isValid(appointmentId)) {
       throw new AppError('Appointment not found', 404);
     }
 
-    const query = Appointment.findOne({ _id: appointmentId, businessId });
+    const filter: any = { _id: appointmentId, businessId };
+
+    /**
+     * Second scoping axis, for technician accounts.
+     *
+     * Business scoping alone stops cross-tenant access but still lets one
+     * technician alter a colleague's job — change its status, overwrite its
+     * checklist and photos, or complete it and raise the invoice. Unassigned jobs
+     * stay reachable on purpose: the schedule shows them to technicians so they
+     * can be picked up, and a job nobody may touch is not a useful state.
+     */
+    if (scope.technicianId) {
+      if (!Types.ObjectId.isValid(scope.technicianId)) {
+        throw new AppError('Appointment not found', 404);
+      }
+      filter.$or = [{ technicianId: scope.technicianId }, { technicianId: null }];
+    }
+
+    const query = Appointment.findOne(filter);
     if (populate) query.populate('customerId').populate('serviceId');
 
     const apt = await query;
@@ -95,9 +123,10 @@ export class WorkerService {
     businessId: Types.ObjectId | string,
     appointmentId: string,
     status: string,
-    locationData?: { latitude?: number; longitude?: number; address?: string }
+    locationData?: { latitude?: number; longitude?: number; address?: string },
+    scope: { technicianId?: string | null } = {}
   ) {
-    const apt = await this.findOwnedAppointment(businessId, appointmentId);
+    const apt = await this.findOwnedAppointment(businessId, appointmentId, false, scope);
 
     (apt as any).status = status;
 
@@ -134,9 +163,10 @@ export class WorkerService {
       photos?: Array<{ url: string; caption?: string; phase: 'before' | 'after' }>;
       partsUsed?: Array<{ partName: string; quantity: number; unitCost: number; totalCost: number }>;
       internalNotes?: string;
-    }
+    },
+    scope: { technicianId?: string | null } = {}
   ) {
-    const apt = await this.findOwnedAppointment(businessId, appointmentId);
+    const apt = await this.findOwnedAppointment(businessId, appointmentId, false, scope);
 
     if (data.checklist) (apt as any).checklist = data.checklist;
     if (data.photos) (apt as any).photos = data.photos;
@@ -156,9 +186,10 @@ export class WorkerService {
       additionalLaborHours?: number;
       laborRate?: number;
       notes?: string;
-    }
+    },
+    scope: { technicianId?: string | null } = {}
   ) {
-    const apt = await this.findOwnedAppointment(businessId, appointmentId, true);
+    const apt = await this.findOwnedAppointment(businessId, appointmentId, true, scope);
 
     /**
      * Completing twice must not raise a second invoice.

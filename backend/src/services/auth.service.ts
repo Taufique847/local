@@ -2,6 +2,7 @@ import bcrypt from 'bcryptjs';
 import { User } from '../models/user.model';
 import { RefreshToken } from '../models/refresh-token.model';
 import { EmailVerification } from '../models/email-verification.model';
+import { PasswordReset } from '../models/password-reset.model';
 import { EmailService } from './email.service';
 import { SignupInput, LoginInput, UserDTO, JwtPayload, IUser } from '../types/auth.types';
 import { AppError } from '../types';
@@ -25,12 +26,21 @@ export class AuthService {
   /** How long an emailed verification link stays usable. */
   private static readonly VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000;
 
+  /**
+   * Much shorter than verification: this link grants a password change, so its
+   * exposure window in an inbox or a proxy log should be small.
+   */
+  private static readonly PASSWORD_RESET_TTL_MS = 60 * 60 * 1000;
+
   private static toDto(user: IUser): UserDTO {
     return {
       id: user._id.toString(),
       name: user.name,
       email: user.email,
       role: user.role,
+      businessId: user.businessId ? user.businessId.toString() : null,
+      businessRole: user.businessRole ?? null,
+      technicianId: user.technicianId ? user.technicianId.toString() : null,
       emailVerified: Boolean(user.emailVerifiedAt),
       createdAt: user.createdAt,
     };
@@ -155,6 +165,21 @@ export class AuthService {
     });
 
     return { user: userDto, token: generateToken(payload), refreshToken };
+  }
+
+  /**
+   * Signs in a user document the caller has already authenticated by other
+   * means — currently only accepting a staff invitation, where possession of the
+   * emailed token is the proof.
+   *
+   * Exposed instead of making `issueSession` public so the set of ways a session
+   * can be created stays small and greppable.
+   */
+  public static async startSessionForUser(
+    user: IUser,
+    context: { ip?: string; userAgent?: string } = {}
+  ): Promise<IssuedSession> {
+    return this.issueSession(user, context);
   }
 
   /**
@@ -328,6 +353,149 @@ export class AuthService {
     }
 
     return this.issueSession(user, context);
+  }
+
+  /**
+   * Starts a password reset.
+   *
+   * Always resolves, whether or not the address is registered. An endpoint that
+   * reported "no such account" would be a free membership oracle for anyone
+   * holding a list of email addresses — and it is a public, unauthenticated
+   * endpoint, so that list can be tried at leisure.
+   *
+   * The consequence is that a genuine typo looks identical to success. That is
+   * the right trade: the cost is one confused user checking their spelling, and
+   * the alternative leaks who banks with which contractor.
+   */
+  public static async requestPasswordReset(
+    email: string,
+    context: { ip?: string } = {}
+  ): Promise<void> {
+    const normalizedEmail = (email || '').toLowerCase().trim();
+    if (!normalizedEmail) {
+      throw new AppError('Email is required', 400);
+    }
+
+    const user = await User.findOne({ email: normalizedEmail });
+
+    if (!user || !user.isActive) {
+      log.info('password_reset_requested_unknown_email', { ip: context.ip });
+      return;
+    }
+
+    // Only the newest link may work. Without this, every link ever requested
+    // stays live for its full hour, so one intercepted older email is enough.
+    await PasswordReset.updateMany(
+      { userId: user._id, consumedAt: { $exists: false } },
+      { $set: { consumedAt: new Date() } }
+    );
+
+    const rawToken = generateRefreshToken();
+
+    await PasswordReset.create({
+      userId: user._id,
+      tokenHash: hashRefreshToken(rawToken),
+      email: user.email,
+      expiresAt: new Date(Date.now() + this.PASSWORD_RESET_TTL_MS),
+      requestedByIp: context.ip,
+    });
+
+    const link = `${config.frontendUrl}/reset-password?token=${encodeURIComponent(rawToken)}`;
+
+    try {
+      await EmailService.send({
+        to: user.email,
+        subject: 'Reset your BlueCollar AI password',
+        text: [
+          `Hi ${user.name},`,
+          '',
+          'Use this link to choose a new password:',
+          link,
+          '',
+          'The link expires in 1 hour and can only be used once.',
+          '',
+          'If you did not ask for this, you can ignore this message — your password has not changed.',
+        ].join('\n'),
+      });
+    } catch (err: any) {
+      /**
+       * Logged, not surfaced.
+       *
+       * Propagating the provider's error would turn this endpoint back into the
+       * enumeration oracle the silent-success behaviour above exists to prevent:
+       * a registered address would fail loudly while an unregistered one returned
+       * 200, which is exactly the signal being withheld.
+       */
+      log.error('password_reset_email_failed', {
+        userId: user._id.toString(),
+        reason: err?.message,
+      });
+      return;
+    }
+
+    log.info('password_reset_email_sent', { userId: user._id.toString() });
+  }
+
+  /**
+   * Completes a password reset and drops every existing session.
+   *
+   * The revocation is the point, not a nicety. Someone resetting a password has
+   * usually either forgotten it or suspects the account is compromised; leaving
+   * the attacker's refresh token alive would make the reset cosmetic.
+   */
+  public static async resetPassword(
+    rawToken: string,
+    newPassword: string
+  ): Promise<void> {
+    if (!rawToken) {
+      throw new AppError('Reset token is missing.', 400);
+    }
+    if (!newPassword || newPassword.length < 8) {
+      throw new AppError('Password must be at least 8 characters long', 400);
+    }
+
+    const record = await PasswordReset.findOne({ tokenHash: hashRefreshToken(rawToken) });
+
+    // One message for every failure, so a caller cannot tell an unknown token
+    // from a spent or expired one.
+    if (!record || record.consumedAt || record.expiresAt.getTime() <= Date.now()) {
+      throw new AppError('This password reset link is invalid or has expired.', 400);
+    }
+
+    const user = await User.findById(record.userId);
+    if (!user || !user.isActive) {
+      throw new AppError('Account not found or has been deactivated.', 404);
+    }
+
+    if (user.email !== record.email) {
+      throw new AppError(
+        'This link was issued for a different email address. Request a new one.',
+        400
+      );
+    }
+
+    user.passwordHash = await bcrypt.hash(newPassword, 12);
+
+    /**
+     * Resetting the password also proves control of the address, so an account
+     * still waiting on verification is verified here rather than being left
+     * unable to log in with its new password when REQUIRE_EMAIL_VERIFICATION
+     * is on.
+     */
+    if (!user.emailVerifiedAt) {
+      user.emailVerifiedAt = new Date();
+    }
+
+    await user.save();
+
+    // Consume before revoking, so a crash between the two cannot leave a usable
+    // token behind.
+    record.consumedAt = new Date();
+    await record.save();
+
+    await this.revokeAllSessions(user._id.toString());
+
+    log.info('password_reset_completed', { userId: user._id.toString() });
   }
 
   // Get current authenticated user profile
