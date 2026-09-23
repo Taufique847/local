@@ -85,6 +85,84 @@ export const formatMoney = (amount: number | null | undefined): string => {
   }).format(amount);
 };
 
+export interface ZonedParts {
+  /** 'Sunday' … 'Saturday', matching `Business.businessHours[].day`. */
+  weekday: string;
+  year: number;
+  /** 1–12. */
+  month: number;
+  day: number;
+  /** 0–23. */
+  hour: number;
+  minute: number;
+  /** Minutes since local midnight, for comparing against openTime/closeTime. */
+  minutesOfDay: number;
+}
+
+/**
+ * Breaks a UTC instant into its wall-clock parts in a given timezone.
+ *
+ * The missing primitive behind two separate defects. `businessHours` stores
+ * `openTime`/`closeTime` as local strings like `'08:00'`, and the code comparing
+ * against them used `getUTCHours()` — correct only for a business that happens to
+ * operate in UTC. A Dallas shop open 08:00–18:00 was treated as open
+ * 02:00–12:00 local.
+ *
+ * `Intl.DateTimeFormat` with an explicit `timeZone` is used rather than date
+ * arithmetic because it is the only thing that gets DST transitions right, and
+ * "is this Sunday in Phoenix?" is exactly the question that breaks on offsets.
+ */
+export const zonedParts = (
+  date: Date | string | number,
+  timezone: string = DEFAULT_TIMEZONE
+): ZonedParts | null => {
+  const d = date instanceof Date ? date : new Date(date);
+  if (isNaN(d.getTime())) return null;
+
+  const options: Intl.DateTimeFormatOptions = {
+    weekday: 'long',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  };
+
+  let parts: Intl.DateTimeFormatPart[];
+  try {
+    parts = new Intl.DateTimeFormat('en-US', { ...options, timeZone: timezone }).formatToParts(d);
+  } catch {
+    parts = new Intl.DateTimeFormat('en-US', { ...options, timeZone: 'UTC' }).formatToParts(d);
+  }
+
+  const get = (type: Intl.DateTimeFormatPartTypes): string =>
+    parts.find((p) => p.type === type)?.value ?? '';
+
+  // `hour12: false` can render midnight as '24' in some ICU versions.
+  const rawHour = Number(get('hour'));
+  const hour = rawHour === 24 ? 0 : rawHour;
+  const minute = Number(get('minute'));
+
+  return {
+    weekday: get('weekday'),
+    year: Number(get('year')),
+    month: Number(get('month')),
+    day: Number(get('day')),
+    hour,
+    minute,
+    minutesOfDay: hour * 60 + minute,
+  };
+};
+
+/** Parses an `'HH:MM'` business-hours string into minutes since midnight. */
+export const parseTimeOfDay = (value: string | undefined, fallback: number): number => {
+  if (!value) return fallback;
+  const [h, m] = value.split(':').map(Number);
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return fallback;
+  return h * 60 + m;
+};
+
 /**
  * Flattens the service address, which is a string on some records and an object
  * on others.

@@ -22,6 +22,7 @@ import {
   Star,
   MessageSquare,
   PhoneForwarded,
+  Inbox,
 } from 'lucide-react';
 import { Business } from '@/types/business';
 import { SubscriptionData } from '@/services/billing.service';
@@ -123,6 +124,9 @@ export function Sidebar({
         { name: 'Appointments', href: '/app/appointments', icon: Calendar },
         { name: 'Leads', href: '/app/leads', icon: UserPlus },
         { name: 'Customers', href: '/app/customers', icon: Users },
+        // Reschedule requests and inbound messages nothing automated could answer.
+        // Both used to be invisible, which is the whole reason this entry exists.
+        { name: 'Action Queue', href: '/app/action-queue', icon: Inbox },
         { name: 'Field Worker App', href: '/worker', icon: Smartphone },
       ],
     },

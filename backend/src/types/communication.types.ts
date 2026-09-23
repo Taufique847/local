@@ -71,6 +71,10 @@ export interface ICommunicationLog extends Document {
   status: MessageStatus;
   /** SMS only. Twilio's message SID, which the delivery-status webhook keys on. */
   twilioSid?: string;
+  /** Inbound only: no handler claimed this message, so a human has to read it. */
+  needsAttention?: boolean;
+  attentionResolvedAt?: Date | null;
+  attentionResolvedBy?: string;
   /**
    * The email provider's message id.
    *

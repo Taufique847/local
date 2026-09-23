@@ -306,6 +306,19 @@ export class AppointmentService {
     const durationMs = appointment.endAt.getTime() - appointment.startAt.getTime();
     const newEndAt = input.endAt ? new Date(input.endAt) : new Date(newStartAt.getTime() + durationMs);
 
+    /**
+     * Opening hours, which this path never checked.
+     *
+     * It re-checked slot overlap and stopped there, so a reschedule to 3am or onto
+     * a closed Sunday succeeded — the slot genuinely is free, because nobody is
+     * working. That matters more now: the customer-facing reschedule queue and
+     * calendar drag-and-drop both land here.
+     */
+    const hours = await AvailabilityService.isWithinBusinessHours(businessId, newStartAt, newEndAt);
+    if (!hours.ok) {
+      throw new AppError(hours.reason || 'That time is outside your opening hours.', 409);
+    }
+
     // Check conflict excluding this appointment
     const hasConflict = await AvailabilityService.checkSlotConflict(
       businessId,

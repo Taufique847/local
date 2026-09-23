@@ -25,6 +25,7 @@ import { portalRoutes } from './portal.routes';
 import demoRequestRoutes from './demo-request.routes';
 import dashboardRoutes from './dashboard.routes';
 import teamRoutes from './team.routes';
+import { rescheduleRequestRoutes } from './reschedule-request.routes';
 
 const apiRouter = Router();
 
@@ -40,6 +41,7 @@ apiRouter.use('/leads', leadRoutes);
 apiRouter.use('/services', serviceRoutes);
 apiRouter.use('/appointments', appointmentRoutes);
 apiRouter.use('/availability', availabilityRoutes);
+apiRouter.use('/reschedule-requests', rescheduleRequestRoutes);
 apiRouter.use('/phone-numbers', phoneNumberRoutes);
 apiRouter.use('/calls', callRoutes);
 apiRouter.use('/messages', communicationRoutes);

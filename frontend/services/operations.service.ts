@@ -20,18 +20,31 @@ export interface MessageLog {
    */
   errorCode?: string;
   errorMessage?: string;
-  customerId?: { _id: string; firstName?: string; lastName?: string } | string | null;
+  /** Email only. */
+  subject?: string;
+  /** Inbound only: nothing automated understood it, so a person has to read it. */
+  needsAttention?: boolean;
+  customerId?: {
+    _id: string;
+    firstName?: string;
+    lastName?: string;
+    phone?: string;
+    email?: string;
+  } | string | null;
   createdAt: string;
 }
 
 export class MessageService {
-  public static async list(params: { limit?: number; direction?: string } = {}): Promise<{
+  public static async list(
+    params: { limit?: number; direction?: string; channel?: string } = {}
+  ): Promise<{
     messages: MessageLog[];
     total: number;
   }> {
     const query = new URLSearchParams();
     if (params.limit) query.set('limit', String(params.limit));
     if (params.direction && params.direction !== 'all') query.set('direction', params.direction);
+    if (params.channel && params.channel !== 'all') query.set('channel', params.channel);
 
     const json = await apiClient.get<{ messages?: MessageLog[]; total?: number }>(
       `/api/messages?${query.toString()}`
@@ -46,6 +59,83 @@ export class MessageService {
   }): Promise<MessageLog> {
     const json = await apiClient.post<{ message: MessageLog }>('/api/messages/send', input);
     return json.message;
+  }
+
+  /**
+   * Inbound messages no automated handler could answer.
+   *
+   * Its own endpoint rather than a filter on the list, because the point is that
+   * it is short and can be emptied. These used to be logged and dropped: the
+   * customer got no reply and nobody was told a question had been asked.
+   */
+  public static async needsAttention(): Promise<{ messages: MessageLog[]; total: number }> {
+    const json = await apiClient.get<{ messages?: MessageLog[]; total?: number }>(
+      '/api/messages/needs-attention'
+    );
+    return { messages: json.messages ?? [], total: json.total ?? 0 };
+  }
+
+  public static async resolveAttention(id: string): Promise<void> {
+    await apiClient.post<{ success: boolean }>(`/api/messages/${id}/resolve-attention`, {});
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Reschedule requests
+// ---------------------------------------------------------------------------
+
+export interface RescheduleRequestItem {
+  _id: string;
+  status: 'pending' | 'applied' | 'dismissed';
+  source: 'sms' | 'email' | 'phone' | 'portal';
+  requestText?: string;
+  originalStartAt: string;
+  offeredSlots: Array<{ startAt: string; endAt: string }>;
+  appliedStartAt?: string | null;
+  createdAt: string;
+  customerId?: {
+    _id: string;
+    firstName?: string;
+    lastName?: string;
+    phone?: string;
+    email?: string;
+  } | null;
+  appointmentId?: {
+    _id: string;
+    title?: string;
+    startAt: string;
+    endAt: string;
+    status: string;
+    technicianName?: string;
+  } | null;
+}
+
+export class RescheduleRequestService {
+  public static async list(
+    status: 'pending' | 'applied' | 'dismissed' | 'all' = 'pending'
+  ): Promise<{ requests: RescheduleRequestItem[]; total: number }> {
+    const json = await apiClient.get<{ requests?: RescheduleRequestItem[]; total?: number }>(
+      `/api/reschedule-requests?status=${status}`
+    );
+    return { requests: json.requests ?? [], total: json.total ?? 0 };
+  }
+
+  /**
+   * Applies a request by moving the appointment.
+   *
+   * Goes through the same reschedule endpoint the calendar uses, so the booking
+   * lock, the conflict re-check, the opening-hours check and the reschedule history
+   * all apply — and the customer is notified from the one place that sends it.
+   */
+  public static async apply(id: string, startAt: string, endAt?: string): Promise<void> {
+    await apiClient.post<{ success: boolean }>(`/api/reschedule-requests/${id}/apply`, {
+      startAt,
+      ...(endAt ? { endAt } : {}),
+    });
+  }
+
+  public static async dismiss(id: string): Promise<void> {
+    await apiClient.post<{ success: boolean }>(`/api/reschedule-requests/${id}/dismiss`, {});
   }
 }
 

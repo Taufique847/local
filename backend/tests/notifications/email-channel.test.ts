@@ -17,6 +17,7 @@ import { AppointmentService } from '../../src/services/appointment.service';
 import { EstimateService } from '../../src/services/estimate.service';
 import { InvoiceService } from '../../src/services/invoice.service';
 import { renderNotification, renderEmailLayout } from '../../src/services/notification-templates';
+import { AppointmentReplyService } from '../../src/services/appointment-reply.service';
 import { CHANNEL_BODY_LIMIT } from '../../src/types/communication.types';
 
 /**
@@ -374,24 +375,39 @@ describe('templates', () => {
     // The old copy said "scheduled for tomorrow" regardless of the lead time, so a
     // two-hour reminder named the wrong day.
     expect(rendered!.body).not.toContain('tomorrow');
-    expect(rendered!.body).toContain('+15551110000');
   });
 
   /**
-   * Guards against re-introducing an instruction the inbound handler cannot
-   * honour. `handleInboundSms` has no branch for C or R — a reply is logged but
-   * never acknowledged — so telling the customer to send one would leave them
-   * believing they had rescheduled. This assertion should be deleted in the same
-   * change that adds the keyword branch, not before.
+   * The instruction and the parser have to agree.
+   *
+   * This assertion replaces its inverse: until `AppointmentReplyService` existed,
+   * a test asserted the copy did *not* offer C/R, because promising a reply the
+   * system drops leaves the customer believing they rescheduled. Now that the
+   * parser is real, the test guards the other direction — the copy must keep
+   * offering what the handler supports. `matchKeyword` is asserted against the
+   * same letters in the reply tests.
    */
-  it('does not instruct a reply the inbound handler cannot parse yet', () => {
+  it('offers the C/R reply the inbound handler parses', () => {
     const rendered = renderNotification('appointment_reminder', 'sms', {
       businessName: 'Acme Air',
       dateTime: 'Fri, Mar 6 at 9:00 AM CST',
     });
 
-    expect(rendered!.body).not.toMatch(/reply\s+c\b/i);
-    expect(rendered!.body).not.toMatch(/reply\s+r\b/i);
+    const body = rendered!.body;
+
+    // Every letter the copy tells the customer to send is pulled back out and fed
+    // to the real parser, so the copy and the handler cannot drift apart.
+    const offered = [...body.matchAll(/\bReply ([A-Z])\b|\bor ([A-Z]) to\b/g)]
+      .map((m) => m[1] ?? m[2])
+      .filter(Boolean);
+
+    expect(offered.length).toBeGreaterThan(0);
+    for (const letter of offered) {
+      expect(AppointmentReplyService.matchKeyword(letter)).not.toBeNull();
+    }
+
+    expect(body).toMatch(/Reply C to confirm/);
+    expect(body).toMatch(/R to reschedule/);
   });
 });
 

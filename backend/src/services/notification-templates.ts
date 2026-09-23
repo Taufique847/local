@@ -212,14 +212,13 @@ const renderSmsBody = (type: MessageType, v: ReturnType<typeof resolve>): string
        * is configurable per business, so a two-hour reminder told the customer the
        * wrong day. That is fixed by interpolating `dateTime`.
        *
-       * It deliberately does NOT say "Reply C to confirm or R to reschedule" yet.
-       * Nothing in `handleInboundSms` parses those keywords — a reply is logged as
-       * an inbound row the owner can see, but the customer gets no acknowledgement
-       * back. Printing an instruction the system silently drops is worse than
-       * vague copy, because the customer believes they have rescheduled. The
-       * keyword branch and this wording land together.
+       * The `C` / `R` instruction is only here because
+       * `AppointmentReplyService.handleInboundReply` now actually parses those
+       * keywords, stamps `confirmedByCustomerAt` and opens a `RescheduleRequest`.
+       * It was deliberately withheld until then: an instruction the system
+       * silently drops leaves the customer believing they have rescheduled.
        */
-      return `Reminder from ${v.business}: your appointment${srv} is ${v.dateTime}${addr}.${v.phone ? ` Need to change it? Call ${v.phone}.` : ''}`;
+      return `Reminder from ${v.business}: your appointment${srv} is ${v.dateTime}${addr}. Reply C to confirm or R to reschedule.`;
     case 'appointment_rescheduled':
       return `Hi ${v.customerFormal}, your appointment with ${v.business} has been rescheduled to ${v.dateTime}${addr}. Thank you!`;
     case 'appointment_cancelled':

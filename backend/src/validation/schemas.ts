@@ -412,6 +412,26 @@ export const appointmentStatusSchema = z.object({
   cancellationReason: trimmed(500).optional(),
 });
 
+/**
+ * POST /api/reschedule-requests/:id/apply
+ *
+ * `startAt` is required and must parse. The owner is picking a new time for a
+ * customer who asked to move, and an unparseable date reaching
+ * `rescheduleAppointment` would surface as a generic 400 with no indication of
+ * which field was wrong.
+ */
+export const applyRescheduleRequestSchema = z.object({
+  startAt: z
+    .string()
+    .trim()
+    .refine((v) => !isNaN(new Date(v).getTime()), 'Provide a valid ISO date and time'),
+  endAt: z
+    .string()
+    .trim()
+    .refine((v) => !isNaN(new Date(v).getTime()), 'Provide a valid ISO date and time')
+    .optional(),
+});
+
 export const workerJobStatusSchema = z.object({
   status: z.enum([
     'scheduled',

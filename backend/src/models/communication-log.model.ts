@@ -128,6 +128,27 @@ const communicationLogSchema = new Schema<ICommunicationLog>(
       type: String,
       trim: true,
     },
+    /**
+     * Set on an inbound message that no handler claimed.
+     *
+     * Every inbound SMS was logged and, if it matched no consent keyword, no
+     * rating and no recovery intent, silently dropped — the customer got no reply
+     * and the owner was never told a question had been asked. A row in a list the
+     * owner never opens is not an answer, so unclaimed messages are now flagged
+     * and surfaced as a queue.
+     */
+    needsAttention: {
+      type: Boolean,
+      default: false,
+    },
+    attentionResolvedAt: {
+      type: Date,
+      default: null,
+    },
+    attentionResolvedBy: {
+      type: String,
+      trim: true,
+    },
     metadata: {
       type: Schema.Types.Mixed,
     },
@@ -141,5 +162,11 @@ const communicationLogSchema = new Schema<ICommunicationLog>(
 communicationLogSchema.index({ businessId: 1, createdAt: -1 });
 communicationLogSchema.index({ businessId: 1, to: 1 });
 communicationLogSchema.index({ businessId: 1, customerId: 1 });
+// The owner's "needs attention" queue. Partial so it only indexes the handful of
+// rows that are actually flagged, not every message ever sent.
+communicationLogSchema.index(
+  { businessId: 1, createdAt: -1 },
+  { partialFilterExpression: { needsAttention: true }, name: 'needs_attention_queue' }
+);
 
 export const CommunicationLog = model<ICommunicationLog>('CommunicationLog', communicationLogSchema);

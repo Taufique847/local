@@ -262,7 +262,7 @@ export class CommunicationService {
       }
     }
 
-    await CommunicationLog.create({
+    const inboundLog = await CommunicationLog.create({
       businessId,
       customerId: customer?._id || null,
       direction: 'inbound',
@@ -272,10 +272,27 @@ export class CommunicationService {
       to: To,
       body: text,
       status: 'received',
+      /**
+       * Flagged on arrival, cleared by whichever handler answers it.
+       *
+       * This direction is deliberate. Flagging on failure instead would mean any
+       * branch added later that forgets to flag silently reintroduces the original
+       * bug — a customer question logged, unanswered and invisible. Starting
+       * flagged makes forgetting safe: the worst case is an owner reading a
+       * message that was in fact handled.
+       */
+      needsAttention: true,
       twilioSid: MessageSid,
     });
 
+    /** Called by the handler that answered this message. */
+    const claim = async (): Promise<void> => {
+      inboundLog.needsAttention = false;
+      await inboundLog.save();
+    };
+
     if (isOptOut) {
+      await claim();
       return {
         reply: 'You have been unsubscribed from notifications and will receive no further messages. Reply START to resubscribe.',
       };
@@ -289,9 +306,34 @@ export class CommunicationService {
      * into a booking.
      */
     if (isOptIn) {
+      await claim();
       return {
         reply: 'You are subscribed again and will receive appointment updates. Reply STOP at any time to unsubscribe.',
       };
+    }
+
+    /**
+     * Appointment confirm / reschedule, ahead of the CSAT and recovery handlers.
+     *
+     * Placed AFTER the consent keywords, not before. `CANCEL` is a
+     * carrier-mandated opt-out keyword, and a customer typing it almost certainly
+     * means "cancel my appointment" — but acting on that reading instead of
+     * honouring the opt-out is a TCPA violation, so consent wins and appointment
+     * cancellation needs its own distinct keyword.
+     *
+     * Placed BEFORE CSAT and recovery because a bare `C` or `R` from a customer
+     * with an upcoming job is unambiguous, and the recovery handler's intent regex
+     * is loose enough to swallow short replies.
+     */
+    try {
+      const { AppointmentReplyService } = await import('./appointment-reply.service');
+      const replyRes = await AppointmentReplyService.handleInboundReply(businessId, From, text);
+      if (replyRes.handled && replyRes.replyMessage) {
+        await claim();
+        return { reply: replyRes.replyMessage };
+      }
+    } catch (err: any) {
+      logger.warn('inbound_appointment_reply_error', { reason: err?.message });
     }
 
     // Area 4: Review / CSAT rating reply (1-5 stars)
@@ -303,10 +345,11 @@ export class CommunicationService {
         text
       );
       if (ratingRes.handled && ratingRes.responseText) {
+        await claim();
         return { reply: ratingRes.responseText };
       }
     } catch (err: any) {
-      console.warn('Error checking review CSAT in inbound SMS:', err.message);
+      logger.warn('inbound_csat_error', { reason: err?.message });
     }
 
     // Area 1: Speed-to-lead recovery reply
@@ -318,13 +361,76 @@ export class CommunicationService {
         text
       );
       if (recoveryRes.handled && recoveryRes.replyMessage) {
+        await claim();
         return { reply: recoveryRes.replyMessage };
       }
     } catch (err: any) {
-      console.warn('Error checking lead recovery in inbound SMS:', err.message);
+      logger.warn('inbound_lead_recovery_error', { reason: err?.message });
     }
 
+    /**
+     * Nothing claimed it, so the flag set at creation stands and a person has to
+     * read it.
+     *
+     * This is where an inbound message used to end: logged, unanswered, and
+     * invisible. The customer still gets no automated reply — inventing one would
+     * be worse than silence — but the owner now has a queue.
+     */
     return {};
+  }
+
+  /**
+   * Inbound messages no automated handler could answer.
+   *
+   * Deliberately a separate query rather than a filter on the main list: the
+   * point is that it is short and can be emptied, and burying it in a paginated
+   * history of every message is what made the problem invisible.
+   */
+  public static async getNeedsAttention(
+    businessId: Types.ObjectId | string,
+    filter: { page?: string | number; limit?: string | number } = {}
+  ): Promise<{ messages: ICommunicationLog[]; total: number; page: number; totalPages: number }> {
+    const page = Math.max(1, Number(filter.page) || 1);
+    const limit = Math.min(100, Math.max(1, Number(filter.limit) || 20));
+
+    const query = { businessId, needsAttention: true, attentionResolvedAt: null };
+
+    const [messages, total] = await Promise.all([
+      CommunicationLog.find(query)
+        .sort({ createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .populate('customerId', 'firstName lastName phone email'),
+      CommunicationLog.countDocuments(query),
+    ]);
+
+    return { messages, total, page, totalPages: Math.ceil(total / limit) || 1 };
+  }
+
+  /** Marks a flagged message as dealt with. Scoped by businessId. */
+  public static async resolveAttention(
+    businessId: Types.ObjectId | string,
+    messageId: string,
+    resolvedBy?: string
+  ): Promise<ICommunicationLog> {
+    if (!Types.ObjectId.isValid(messageId)) {
+      throw new AppError('Message not found', 404);
+    }
+
+    const message = await CommunicationLog.findOneAndUpdate(
+      { _id: messageId, businessId, needsAttention: true },
+      {
+        $set: {
+          needsAttention: false,
+          attentionResolvedAt: new Date(),
+          attentionResolvedBy: resolvedBy || 'owner',
+        },
+      },
+      { new: true }
+    );
+
+    if (!message) throw new AppError('Message not found', 404);
+    return message;
   }
 
   /**

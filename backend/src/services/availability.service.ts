@@ -3,6 +3,7 @@ import { Business } from '../models/business.model';
 import { Service } from '../models/service.model';
 import { Appointment } from '../models/appointment.model';
 import { TimeSlot } from '../types/appointment.types';
+import { zonedParts, parseTimeOfDay } from '../utils/format';
 import { AppError } from '../types';
 
 export class AvailabilityService {
@@ -28,6 +29,74 @@ export class AvailabilityService {
 
     const conflicting = await Appointment.findOne(filter);
     return !!conflicting;
+  }
+
+  /**
+   * Whether a time window falls inside the business's published opening hours.
+   *
+   * `rescheduleAppointment` re-checked slot overlap and nothing else, so an
+   * appointment could be moved to 3am, or onto a Sunday the business marks closed,
+   * and the conflict check would happily report the slot free — it is free,
+   * because nobody works then.
+   *
+   * Compared in the business's own timezone. The rest of this file still buckets
+   * by UTC; that is a separate defect and this method is deliberately correct so
+   * the fix has something to converge on.
+   */
+  static async isWithinBusinessHours(
+    businessId: Types.ObjectId | string,
+    startAt: Date,
+    endAt: Date
+  ): Promise<{ ok: boolean; reason?: string }> {
+    const business = await Business.findById(businessId).select('businessHours timezone').lean();
+    if (!business) throw new AppError('Business not found', 404);
+
+    const timezone = business.timezone || 'America/New_York';
+
+    // A business that has never configured hours is not treated as closed — that
+    // would make every booking fail on a fresh account.
+    if (!business.businessHours?.length) return { ok: true };
+
+    const start = zonedParts(startAt, timezone);
+    const end = zonedParts(endAt, timezone);
+    if (!start || !end) return { ok: false, reason: 'Invalid appointment times' };
+
+    const dayHours = business.businessHours.find(
+      (h) => h.day.toLowerCase() === start.weekday.toLowerCase()
+    );
+
+    if (!dayHours || !dayHours.isOpen) {
+      return { ok: false, reason: `${start.weekday} is outside your published opening hours.` };
+    }
+
+    const open = parseTimeOfDay(dayHours.openTime, 8 * 60);
+    const close = parseTimeOfDay(dayHours.closeTime, 18 * 60);
+
+    if (start.minutesOfDay < open) {
+      return {
+        ok: false,
+        reason: `That start time is before you open on ${start.weekday} (${dayHours.openTime || '08:00'}).`,
+      };
+    }
+
+    /**
+     * A job that runs past closing is rejected, and a job that crosses midnight
+     * into the next day with it — the end lands on a different calendar day, so
+     * its minutes-of-day would compare as early morning and pass.
+     */
+    const endMinutes =
+      end.day === start.day && end.month === start.month && end.year === start.year
+        ? end.minutesOfDay
+        : close + 1;
+
+    if (endMinutes > close) {
+      return {
+        ok: false,
+        reason: `That appointment would finish after you close on ${start.weekday} (${dayHours.closeTime || '18:00'}).`,
+      };
+    }
+
+    return { ok: true };
   }
 
   /**
