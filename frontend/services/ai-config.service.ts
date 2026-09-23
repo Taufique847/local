@@ -72,6 +72,117 @@ export const POLICY_DEFAULTS: BusinessPolicy = {
   appointmentRemindersEnabled: true,
 };
 
+// ---------------------------------------------------------------------------
+// Per-business notification copy
+// ---------------------------------------------------------------------------
+
+export type MessageTemplateType =
+  | 'appointment_confirmation'
+  | 'appointment_reminder'
+  | 'appointment_rescheduled'
+  | 'appointment_cancelled'
+  | 'missed_call_followup'
+  | 'lead_followup'
+  | 'estimate_sent'
+  | 'invoice_issued'
+  | 'payment_receipt';
+
+export interface MessageTemplateRow {
+  type: MessageTemplateType;
+  channel: 'sms' | 'email';
+  /** This business has saved its own copy or toggle for this pair. */
+  customised: boolean;
+  enabled: boolean;
+  body: string;
+  subject: string;
+  /** The shipped wording, rendered with sample data. Read-only reference. */
+  defaultPreview: string;
+  defaultSubject: string;
+  preview: string;
+  previewSubject: string;
+  /** False when the platform has no copy for this pair at all. */
+  supported: boolean;
+  onByDefault: boolean;
+  variables: Array<{ name: string; label: string }>;
+}
+
+/** Human labels for each notification, and when it goes out. */
+export const MESSAGE_TYPE_LABELS: Record<
+  MessageTemplateType,
+  { title: string; when: string }
+> = {
+  appointment_confirmation: {
+    title: 'Booking confirmation',
+    when: 'Immediately after an appointment is booked.',
+  },
+  appointment_reminder: {
+    title: 'Appointment reminder',
+    when: 'Ahead of the appointment, using the lead time below.',
+  },
+  appointment_rescheduled: {
+    title: 'Appointment moved',
+    when: 'When an appointment time changes.',
+  },
+  appointment_cancelled: {
+    title: 'Appointment cancelled',
+    when: 'When an appointment is cancelled.',
+  },
+  missed_call_followup: {
+    title: 'Missed call follow-up',
+    when: 'Within seconds of a call nobody answered. Text only.',
+  },
+  lead_followup: {
+    title: 'New enquiry follow-up',
+    when: 'After a new enquiry comes in. Text only.',
+  },
+  estimate_sent: { title: 'Quote sent', when: 'When a quote is created.' },
+  invoice_issued: { title: 'Invoice sent', when: 'When an invoice is raised.' },
+  payment_receipt: { title: 'Payment receipt', when: 'When a payment is recorded.' },
+};
+
+export class MessageTemplateService {
+  public static async list(): Promise<MessageTemplateRow[]> {
+    const json = await apiClient.get<{ templates?: MessageTemplateRow[] }>(
+      '/api/message-templates'
+    );
+    return json.templates ?? [];
+  }
+
+  public static async save(input: {
+    type: MessageTemplateType;
+    channel: 'sms' | 'email';
+    enabled: boolean;
+    body?: string;
+    subject?: string;
+  }): Promise<void> {
+    await apiClient.put<{ success: boolean }>('/api/message-templates', input);
+  }
+
+  /** Discards the override so the shipped wording applies again. */
+  public static async reset(type: MessageTemplateType, channel: 'sms' | 'email'): Promise<void> {
+    await apiClient.delete<{ success: boolean }>(`/api/message-templates/${type}/${channel}`);
+  }
+
+  /**
+   * Renders draft copy with sample data.
+   *
+   * Server-side on purpose: it uses the same substitution the send path uses, so the
+   * preview cannot disagree with what the customer receives the way a client-side
+   * approximation eventually would.
+   */
+  public static async preview(input: {
+    type: MessageTemplateType;
+    body?: string;
+    subject?: string;
+  }): Promise<{ preview: string; previewSubject: string }> {
+    const json = await apiClient.post<{ preview?: string; previewSubject?: string }>(
+      '/api/message-templates/preview',
+      input
+    );
+    return { preview: json.preview ?? '', previewSubject: json.previewSubject ?? '' };
+  }
+}
+
 export class PolicyService {
   public static async get(): Promise<BusinessPolicy> {
     const json = await apiClient.get<{ policy?: Partial<BusinessPolicy> }>('/api/policies');

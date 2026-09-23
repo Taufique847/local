@@ -420,6 +420,49 @@ export const appointmentStatusSchema = z.object({
  * `rescheduleAppointment` would surface as a generic 400 with no indication of
  * which field was wrong.
  */
+/**
+ * PUT /api/message-templates
+ *
+ * `body` is allowed to be empty: that means "keep the standard wording but honour
+ * the on/off toggle", so an owner can switch a channel off without first having to
+ * retype the message. Placeholder names are validated in the service, which knows
+ * the allowed set per message type.
+ */
+export const messageTemplateSchema = z.object({
+  type: z.enum([
+    'appointment_confirmation',
+    'appointment_reminder',
+    'appointment_rescheduled',
+    'appointment_cancelled',
+    'missed_call_followup',
+    'lead_followup',
+    'estimate_sent',
+    'invoice_issued',
+    'payment_receipt',
+  ]),
+  channel: z.enum(['sms', 'email']),
+  enabled: z.boolean().optional(),
+  // 20000 is the email ceiling; the service narrows it to 1600 for SMS.
+  body: z.string().trim().max(20_000).optional(),
+  subject: trimmed(200).optional(),
+});
+
+export const messageTemplatePreviewSchema = z.object({
+  type: z.enum([
+    'appointment_confirmation',
+    'appointment_reminder',
+    'appointment_rescheduled',
+    'appointment_cancelled',
+    'missed_call_followup',
+    'lead_followup',
+    'estimate_sent',
+    'invoice_issued',
+    'payment_receipt',
+  ]),
+  body: z.string().trim().max(20_000).optional(),
+  subject: trimmed(200).optional(),
+});
+
 export const applyRescheduleRequestSchema = z.object({
   startAt: z
     .string()

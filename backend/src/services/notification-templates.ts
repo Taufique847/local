@@ -131,6 +131,117 @@ export const renderEmailLayout = (input: EmailLayoutInput): RenderedEmail => {
   return { text: textParts.join('\n').trimEnd(), html };
 };
 
+/**
+ * The variables each message type may reference, with human labels for the editor.
+ *
+ * Declared rather than inferred, for two reasons. The settings UI has to show an
+ * owner what they are allowed to write, and a saved template containing
+ * `{{invioceNumber}}` must be rejected at save time — not discovered when a
+ * customer receives the literal braces.
+ *
+ * Only variables the corresponding trigger actually supplies are listed. Offering
+ * `{{technicianName}}` on an invoice email would be offering a blank.
+ */
+export const TEMPLATE_VARIABLES: Record<
+  MessageType,
+  Array<{ name: keyof NotificationVars; label: string }>
+> = (() => {
+  const business = [
+    { name: 'businessName' as const, label: 'Your business name' },
+    { name: 'businessPhone' as const, label: 'Your phone number' },
+    { name: 'businessEmail' as const, label: 'Your email address' },
+  ];
+  const customer = [{ name: 'customerName' as const, label: "Customer's name" }];
+  const appointment = [
+    { name: 'dateTime' as const, label: 'Appointment date and time' },
+    { name: 'address' as const, label: 'Service address' },
+    { name: 'serviceName' as const, label: 'Service booked' },
+    { name: 'technicianName' as const, label: 'Assigned technician' },
+  ];
+  const document = [
+    { name: 'documentNumber' as const, label: 'Quote or invoice number' },
+    { name: 'amount' as const, label: 'Amount, formatted' },
+    { name: 'link' as const, label: 'Secure customer link' },
+  ];
+
+  return {
+    appointment_confirmation: [...customer, ...business, ...appointment],
+    appointment_reminder: [...customer, ...business, ...appointment],
+    appointment_rescheduled: [...customer, ...business, ...appointment],
+    appointment_cancelled: [...customer, ...business],
+    missed_call_followup: [...business],
+    lead_followup: [...customer, ...business],
+    estimate_sent: [...customer, ...business, ...document],
+    invoice_issued: [
+      ...customer,
+      ...business,
+      ...document,
+      { name: 'dueDate' as const, label: 'Payment due date' },
+    ],
+    payment_receipt: [
+      ...customer,
+      ...business,
+      ...document,
+      { name: 'paymentMethod' as const, label: 'How they paid' },
+    ],
+    custom: [...customer, ...business],
+  };
+})();
+
+/** Every placeholder name legal in a template for this type. */
+export const allowedVariablesFor = (type: MessageType): string[] =>
+  (TEMPLATE_VARIABLES[type] ?? []).map((v) => v.name);
+
+const PLACEHOLDER = /\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g;
+
+/** Placeholder names a template actually uses, deduplicated. */
+export const extractPlaceholders = (body: string): string[] => {
+  const found = new Set<string>();
+  for (const match of (body || '').matchAll(PLACEHOLDER)) {
+    found.add(match[1]);
+  }
+  return [...found];
+};
+
+/**
+ * Substitutes `{{variable}}` in per-business copy.
+ *
+ * Values come from the same neutral-fallback map the shipped defaults use, so an
+ * override referencing `{{dateTime}}` on a message with no time reads "your
+ * scheduled time" rather than an empty gap — and never the literal braces, which
+ * is what a naive replacer leaves behind.
+ *
+ * Unknown placeholders are stripped rather than left in place. Saving validates
+ * against `allowedVariablesFor`, so reaching here means the allowed set shrank
+ * after the template was written, and showing a customer `{{oldField}}` is worse
+ * than showing nothing.
+ */
+export const applyTemplate = (body: string, vars: NotificationVars): string => {
+  const v = resolve(vars);
+
+  const values: Record<string, string> = {
+    customerName: v.customerFormal,
+    businessName: v.business,
+    businessPhone: v.phone,
+    businessEmail: v.email,
+    dateTime: v.dateTime,
+    address: v.address,
+    serviceName: v.service,
+    technicianName: v.technician,
+    amount: v.amount,
+    documentNumber: v.docNumber,
+    link: v.link,
+    dueDate: v.dueDate,
+    paymentMethod: v.paymentMethod,
+  };
+
+  return (body || '')
+    .replace(PLACEHOLDER, (_match, name: string) => values[name] ?? '')
+    // Substituting an empty value can leave doubled spaces mid-sentence.
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+};
+
 /** Fills in the neutral wording used when a variable was not supplied. */
 const resolve = (vars: NotificationVars) => ({
   customer: vars.customerName || 'there',

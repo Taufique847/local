@@ -26,6 +26,7 @@ import demoRequestRoutes from './demo-request.routes';
 import dashboardRoutes from './dashboard.routes';
 import teamRoutes from './team.routes';
 import { rescheduleRequestRoutes } from './reschedule-request.routes';
+import { messageTemplateRoutes } from './message-template.routes';
 
 const apiRouter = Router();
 
@@ -45,6 +46,7 @@ apiRouter.use('/reschedule-requests', rescheduleRequestRoutes);
 apiRouter.use('/phone-numbers', phoneNumberRoutes);
 apiRouter.use('/calls', callRoutes);
 apiRouter.use('/messages', communicationRoutes);
+apiRouter.use('/message-templates', messageTemplateRoutes);
 apiRouter.use('/knowledge', knowledgeRoutes);
 apiRouter.use('/policies', policyRoutes);
 apiRouter.use('/recovery', leadRecoveryRoutes);

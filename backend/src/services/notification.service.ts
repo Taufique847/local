@@ -6,7 +6,8 @@ import { Appointment } from '../models/appointment.model';
 import { Service } from '../models/service.model';
 import { CommunicationService } from './communication.service';
 import { EmailService } from './email.service';
-import { renderNotification, DEFAULT_CHANNELS } from './notification-templates';
+import { renderNotification } from './notification-templates';
+import { MessageTemplateService, ResolvedTemplate } from './message-template.service';
 import {
   MessageType,
   MessageChannel,
@@ -60,13 +61,22 @@ export class NotificationService {
    * `'both'` is expanded rather than treated as a third channel so that
    * everything downstream only ever deals in real channels.
    */
-  private static resolveChannels(
+  private static async resolveChannels(
+    businessId: Types.ObjectId | string,
     type: MessageType,
     preference: SendNotificationOptions['channels']
-  ): MessageChannel[] {
+  ): Promise<MessageChannel[]> {
+    /**
+     * An explicit option from the caller still wins over the business's setting.
+     *
+     * Only used by code paths that mean a specific channel — an ad-hoc send to one
+     * address, or a test. It is not a way for a trigger to override an owner who
+     * has switched a message off, because no trigger passes it.
+     */
     if (preference === 'both') return ['sms', 'email'];
     if (preference === 'sms' || preference === 'email') return [preference];
-    return DEFAULT_CHANNELS[type] ?? ['sms'];
+
+    return MessageTemplateService.channelsForSend(businessId, type);
   }
 
   /**
@@ -338,7 +348,7 @@ export class NotificationService {
       ...vars,
     };
 
-    const channels = this.resolveChannels(type, options.channels);
+    const channels = await this.resolveChannels(businessId, type, options.channels);
 
     for (const channel of channels) {
       try {
@@ -351,6 +361,7 @@ export class NotificationService {
                 mergedVars,
                 options
               )
+
             : await this.sendEmail(
                 businessId,
                 type,
@@ -388,10 +399,25 @@ export class NotificationService {
       return { channel: 'sms', status: 'skipped', reason: 'no_phone_number' };
     }
 
-    const body = options.bodyOverride ?? renderNotification(type, 'sms', vars)?.body;
+    /**
+     * Per-business copy first, shipped default second.
+     *
+     * `resolveForSend` returns `null` for two different situations and both mean
+     * "do not send": the business has switched this pair off, or there is no copy
+     * for it at all. They are distinguished in the log, not here.
+     */
+    const resolved: ResolvedTemplate = options.bodyOverride
+      ? { status: 'ok', body: options.bodyOverride, source: 'override' }
+      : await MessageTemplateService.resolveForSend(businessId, type, 'sms', vars);
+
+    if (resolved.status === 'disabled') {
+      return { channel: 'sms', status: 'skipped', reason: 'channel_disabled_by_business' };
+    }
+
+    const body = resolved.status === 'ok' ? resolved.body : '';
 
     // An empty body is a missing template, not a blank message to send.
-    if (!body || !body.trim()) {
+    if (!body.trim()) {
       log.warn('notification_no_sms_template', { type });
       return { channel: 'sms', status: 'skipped', reason: 'no_template_for_channel' };
     }
@@ -457,17 +483,42 @@ export class NotificationService {
       return { channel: 'email', status: 'skipped', reason: 'no_email_address' };
     }
 
-    const rendered = renderNotification(type, 'email', vars);
+    const shipped = renderNotification(type, 'email', vars);
+    const resolved = await MessageTemplateService.resolveForSend(businessId, type, 'email', vars);
 
-    if (!rendered) {
+    /**
+     * A disabled channel is refused even when the caller asked for it explicitly,
+     * and even when it carries its own body. The owner's decision about what their
+     * customers receive is not a default for a caller to talk past.
+     */
+    if (resolved.status === 'disabled') {
+      return { channel: 'email', status: 'skipped', reason: 'channel_disabled_by_business' };
+    }
+
+    if (resolved.status === 'no_template' && !options.bodyOverride) {
       return { channel: 'email', status: 'skipped', reason: 'no_template_for_channel' };
     }
 
-    const subject = options.subjectOverride ?? rendered.subject ?? `A message from ${businessName}`;
-    const text = options.bodyOverride ?? rendered.body;
-    // A body override is plain text by definition, so the HTML twin is dropped
-    // rather than left describing different content.
-    const html = options.bodyOverride ? undefined : rendered.html;
+    const resolvedOk = resolved.status === 'ok' ? resolved : null;
+
+    const subject =
+      options.subjectOverride ??
+      resolvedOk?.subject ??
+      shipped?.subject ??
+      `A message from ${businessName}`;
+
+    const text = options.bodyOverride ?? resolvedOk!.body;
+
+    /**
+     * The HTML twin is only used when the wording came from the shipped default.
+     *
+     * A per-business override is plain text — the editor is a textarea, not an HTML
+     * editor — so pairing it with the default's HTML would send a customer two
+     * different messages in one email, and whichever their client rendered would be
+     * a coin toss.
+     */
+    const usingShippedCopy = !options.bodyOverride && resolvedOk?.source === 'default';
+    const html = usingShippedCopy ? shipped?.html : undefined;
 
     if (!text.trim()) {
       log.warn('notification_empty_email_body', { type });
