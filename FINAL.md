@@ -1,6 +1,6 @@
 # BlueCollar AI — Final Feature Status
 
-> **Verified:** 23 September 2026, by reading `backend/src` and `frontend/app` directly, by running the built server against a live database, and by a 169-test automated suite whose guards were each confirmed by deliberately breaking them.
+> **Verified:** 23 September 2026, by reading `backend/src` and `frontend/app` directly, by running the built server against a live database, and by a 219-test automated suite whose guards were each confirmed by deliberately breaking them.
 >
 > Reference vision: `targetFeaturesIdea.md` (86 numbered features, sections A–J).
 > This file supersedes the status sections of `PROJECT_STATUS_AND_ROADMAP.md`, which was written before the Week 1–4 hardening, Tier 1/Tier 2 work and QA bug fixes landed.
@@ -11,10 +11,10 @@
 
 | Measure | Value |
 |---|---|
-| Features **fully built and verified** | **32 of 86** (~37%) |
-| Features **partially built** (usable but incomplete) | **9 of 86** (~10%) |
+| Features **fully built and verified** | **33 of 86** (~38%) |
+| Features **partially built** (usable but incomplete) | **8 of 86** (~9%) |
 | Features **not started** | **45 of 86** (~52%) |
-| Weighted completion against the full vision | **~38%** |
+| Weighted completion against the full vision | **~43%** (built = 1, partial = 0.5 → 33 + 4 = 37 of 86) |
 | Completion against a **launchable MVP** (§7 of the vision doc) | **~90%** |
 
 Two different questions, two different answers:
@@ -22,7 +22,7 @@ Two different questions, two different answers:
 - **"Is the 86-feature enterprise platform done?"** No — a bit over a third.
 - **"Is there a product a contractor could pay for?"** Nearly. What blocks it now is one thing: the voice pipeline has never handled a real call.
 
-> **Counting note.** An earlier revision of this file claimed 26 built / 13 partial. That headline never matched its own tables — counting the numbered rows below gives 32 and 9. The tables were right; the summary was wrong. Numbers here are now derived from the tables rather than written alongside them.
+> **Counting note.** An earlier revision of this file claimed 26 built / 13 partial. That headline never matched its own tables — counting the numbered rows below gives 33 and 8. The tables were right; the summary was wrong. Numbers here are now derived from the tables by counting ✅ and 🟡 rows, and the weighting formula is stated inline rather than left implicit — the previous "~38%" had no stated derivation, so it could not be checked.
 
 The estimate in `PROJECT_STATUS_AND_ROADMAP.md` was 18–20%. The rise is mostly hardening and correctness rather than new surface area: the voice pipeline became real, the security holes closed, a large amount of fabricated data was removed, and the product gained the two things that stop it being single-user — staff accounts and a password recovery path.
 
@@ -87,8 +87,8 @@ Each row was confirmed in code, and where marked ✓runtime, exercised against a
 | # | Feature | Status | Notes |
 |---|---|---|---|
 | 35 | Two-way SMS inbox | ✅ Built | Threads, send, inbound handling, failure reasons shown inline. |
-| 38 | Automated notifications | 🟡 Partial | SMS covered (booking, reminder, review request, dispatch). **Email notifications not wired** beyond verification. |
-| 39 | Reminder controls | 🟡 Partial | Quiet hours, opt-out and delayed review surveys work. No customer-facing confirm/reschedule reply handling. |
+| 38 | Automated notifications | ✅ Built | One `NotificationService` sends on both SMS and email, renders from one template set, and logs both channels identically in `CommunicationLog`. Wired: booking confirmation, reschedule, cancellation, appointment reminder, quote sent, invoice issued, payment receipt. Never throws, so a provider outage cannot fail a booking; a failed send is recorded with a cause rather than silently dropped. **`EMAIL_API_KEY` is unset, so no email has actually left the server** — the path is exercised with the sender stubbed, and logs a `failed` row with `errorCode: 'email_not_configured'` until the key is set. |
+| 39 | Reminder controls | 🟡 Partial | Appointment reminders now exist and run: `appointment_reminders` cron every 15 min, per-business `reminderLeadHours` (default 24) and an on/off switch, atomic claim so a reminder cannot double-send, quiet-hours deferral, bounded retry on provider failure. Still missing the **customer-facing confirm/reschedule reply** — `confirmedByCustomerAt` is on the model but nothing parses an inbound `C`/`R`, so the reminder copy deliberately does not offer it yet. |
 | 41 | Template management | 🟡 Partial | Templates exist in code with variables. No per-business template editor. |
 
 ### G. Pricing, invoicing and payments
@@ -129,7 +129,7 @@ Each row was confirmed in code, and where marked ✓runtime, exercised against a
 | Password reset by email, single-use, revokes all sessions | ✅ Built ✓tested (send path unexercised) |
 | Staff invitations — email link, single use, tenant-bound | ✅ Built ✓tested (send path unexercised) |
 | Media-stream WebSocket authorization (single-use signed token) | ✅ Built ✓tested |
-| Automated test suite — 169 tests over tenancy, money, auth and pricing | ✅ Built, wired into CI |
+| Automated test suite — 219 tests over tenancy, money, auth, pricing and notifications | ✅ Built, wired into CI |
 | Data retention sweep + per-customer data erasure | ✅ Built |
 | AI/recording disclosure spoken before the assistant answers | ✅ Built |
 | Docker, compose, CI (typecheck/build/secrets/image) | ✅ Built |
@@ -150,7 +150,7 @@ Each row was confirmed in code, and where marked ✓runtime, exercised against a
 | A2 | **Password reset flow** | ✅ Done | There was no recovery path at all — a forgotten password meant permanent lockout. | — |
 | A3 | **Commit the work** | ✅ Done | Committed in four logical commits on `feat/staff-accounts-rbac-and-tests` and pushed. Verified no `.env`, key material or temp file entered any commit. | — |
 | ~~A4~~ | ~~**Rotate the leaked credential**~~ | ❌ **Withdrawn — was never true** | See below. | — |
-| A5 | **Tests for the money and tenancy paths** | ✅ Done | The QA pass found a critical cross-tenant hole precisely because nothing guarded these. 169 tests now cover worker tenant + per-technician scoping, portal share tokens, Stripe and Twilio webhook signatures, RBAC, password reset, invitations, the media-stream token, job-completion pricing and SMS consent. | — |
+| A5 | **Tests for the money and tenancy paths** | ✅ Done | The QA pass found a critical cross-tenant hole precisely because nothing guarded these. 219 tests now cover worker tenant + per-technician scoping, portal share tokens, Stripe and Twilio webhook signatures, RBAC, password reset, invitations, the media-stream token, job-completion pricing and SMS consent. | — |
 
 **On defects found since.** Writing `partial.md` — a day-by-day plan to finish the nine partial features — required reading all nine at model, service, controller and page level. That read turned up **seven defects in shipped code**, all now fixed with tests and mutation checks. Four shared one root cause worth naming: code reading or writing a field that does not exist on the schema, which Mongoose silently tolerates in both directions. The worst of them meant a customer who texted STOP kept receiving messages. Details in `partial.md` §2.
 
@@ -186,7 +186,7 @@ Committing a cookie jar is still poor hygiene, and the CI check that fails on tr
 | B4 | **Equipment and unit registry** | Brand, model, install year, filter size per customer property. Foundational — pre-job briefs and upsell suggestions both depend on it. | 1–2 days |
 | B5 | **Stripe Connect / per-business payouts** | Contractors cannot actually collect their own customers' money into their own account yet. | 3–5 days |
 | B6 | **Emergency triage confidence score** | Turn the keyword list into a context-aware `assess_urgency` tool. Reduces missed-emergency liability. | 1 day |
-| B7 | **Email notifications** | Booking confirmations, invoices and receipts by email. `EmailService` exists; only templates and triggers are missing. | 1–2 days |
+| B7 | ~~**Email notifications**~~ | ✅ **Done.** `NotificationService` + `notification-templates.ts` send booking confirmations, reschedules, cancellations, reminders, quotes, invoices and receipts on SMS and email from one template set. The only thing outstanding is operational: set `EMAIL_API_KEY`. | — |
 | B8 | **Double-booking warning in the UI** | The backend now refuses the conflict, but the calendar does not warn before submitting. | ½ day |
 
 ### Tier C — differentiation once the basics hold
@@ -251,7 +251,7 @@ Worth knowing before a demo, because each one reads as finished in the UI.
 | Job-completion pricing | Automated — a $450 service bills 450, per-business tax and labour rates, diagnostic credit against the taxable base |
 | Technician assignment | Automated through the real booking path — cross-tenant and inactive technicians refused, name derived from the record |
 | SMS consent | Automated — STOP persists and blocks sending, START restores, no duplicate booking from a consent reply |
-| **Automated tests** | ✅ 169 tests, 12 files, in CI. Mutation-checked: 27 deliberate regressions attempted, all 27 caught |
+| **Automated tests** | ✅ 219 tests, 14 files, in CI. Mutation-checked: 51 deliberate regressions attempted, 50 caught — the one survivor was verified behaviour-neutral (a redundant query filter whose load-bearing twin *was* caught) |
 | **Voice pipeline end to end** | ❌ Never — no provider keys |
 | **Email delivery** | ❌ Never — no `EMAIL_API_KEY`. Reset and invite flows are tested with the sender stubbed, so the token lifecycle is proven and the Resend call is not |
 | **Live card payment** | ❌ Never — Stripe in simulation mode |

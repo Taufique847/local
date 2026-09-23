@@ -56,6 +56,9 @@ export interface BusinessPolicy {
   /** Plays a spoken "automated assistant, call is recorded" notice before the AI answers. */
   aiDisclosureEnabled?: boolean;
   aiDisclosureText?: string;
+  /** Hours before an appointment that the reminder goes out. 1–168. */
+  reminderLeadHours?: number;
+  appointmentRemindersEnabled?: boolean;
 }
 
 export const POLICY_DEFAULTS: BusinessPolicy = {
@@ -65,6 +68,8 @@ export const POLICY_DEFAULTS: BusinessPolicy = {
   diagnosticFee: 89,
   emergencyFee: 149,
   aiDisclosureEnabled: true,
+  reminderLeadHours: 24,
+  appointmentRemindersEnabled: true,
 };
 
 export class PolicyService {
@@ -89,6 +94,9 @@ export class PolicyService {
       // announcing is the safe default in all-party consent states.
       aiDisclosureEnabled: p.aiDisclosureEnabled ?? true,
       aiDisclosureText: p.aiDisclosureText,
+      // `??`, not `||`: a deliberate 1-hour lead time must not be read as unset.
+      reminderLeadHours: p.reminderLeadHours ?? POLICY_DEFAULTS.reminderLeadHours,
+      appointmentRemindersEnabled: p.appointmentRemindersEnabled ?? true,
     };
   }
 

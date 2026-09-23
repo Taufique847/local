@@ -7,7 +7,11 @@ import {
   ICommunicationLog,
   SendMessageInput,
   MessageType,
+  MessageChannel,
+  NotificationVars,
+  MESSAGE_CHANNELS,
 } from '../types/communication.types';
+import { renderNotification } from './notification-templates';
 import { config } from '../config/env';
 import { AppError } from '../types';
 import { logger } from '../utils/logger';
@@ -43,43 +47,19 @@ export class CommunicationService {
   }
 
   /**
-   * Renders pre-approved templates with dynamic context variables
+   * Renders the SMS body for a message type.
+   *
+   * Now a thin delegate. The copy itself moved to `notification-templates.ts` so
+   * that the SMS and email versions of a message are defined next to each other
+   * and cannot drift — this switch and the email copy being maintained in
+   * separate files is exactly how a customer ends up with a confirmation text and
+   * a confirmation email that disagree about the appointment time.
+   *
+   * Kept as a public method because the voice agent's booking tool calls it
+   * directly.
    */
-  public static renderTemplate(
-    type: MessageType,
-    vars: {
-      customerName?: string;
-      businessName?: string;
-      businessPhone?: string;
-      dateTime?: string;
-      address?: string;
-      serviceName?: string;
-    }
-  ): string {
-    const cust = vars.customerName || 'valued customer';
-    const biz = vars.businessName || 'our HVAC team';
-    const phone = vars.businessPhone || '';
-    const dt = vars.dateTime || 'your scheduled time';
-    const addr = vars.address ? ` at ${vars.address}` : '';
-    const srv = vars.serviceName ? ` for ${vars.serviceName}` : '';
-
-    switch (type) {
-      case 'appointment_confirmation':
-        return `Hi ${cust}, your appointment with ${biz}${srv} is confirmed for ${dt}${addr}. Reply STOP to cancel notifications.`;
-      case 'appointment_reminder':
-        return `Reminder: Your HVAC appointment with ${biz} is scheduled for tomorrow at ${dt}${addr}. Please let us know if you need to reschedule!`;
-      case 'appointment_rescheduled':
-        return `Hi ${cust}, your appointment with ${biz} has been rescheduled to ${dt}${addr}. Thank you!`;
-      case 'appointment_cancelled':
-        return `Hi ${cust}, your appointment with ${biz} has been cancelled. Call us at ${phone} to rebook whenever you're ready.`;
-      case 'missed_call_followup':
-        return `Hi! Sorry we missed your call at ${biz}. How can we help you with your heating or AC today?`;
-      case 'lead_followup':
-        return `Hi ${cust}, thank you for contacting ${biz}. Our team is reviewing your service request and will follow up shortly!`;
-      case 'custom':
-      default:
-        return '';
-    }
+  public static renderTemplate(type: MessageType, vars: NotificationVars): string {
+    return renderNotification(type, 'sms', vars)?.body || '';
   }
 
   /**
@@ -367,8 +347,12 @@ export class CommunicationService {
 
     const status = statusMap[MessageStatus.toLowerCase()] || 'sent';
 
+    // Scoped to the SMS channel. `twilioSid` is now only ever written by this
+    // path, but an unscoped match on a shared log is the kind of thing that
+    // starts overwriting email rows the moment another provider reuses an id
+    // format.
     await CommunicationLog.findOneAndUpdate(
-      { twilioSid: MessageSid },
+      { twilioSid: MessageSid, channel: 'sms' },
       {
         $set: {
           status,
@@ -390,6 +374,7 @@ export class CommunicationService {
       customerId?: string;
       status?: string;
       direction?: string;
+      channel?: string;
     }
   ): Promise<{ messages: ICommunicationLog[]; total: number; page: number; totalPages: number }> {
     const page = Math.max(1, Number(filter.page) || 1);
@@ -400,6 +385,18 @@ export class CommunicationService {
     if (filter.customerId) query.customerId = filter.customerId;
     if (filter.status && filter.status !== 'all') query.status = filter.status;
     if (filter.direction && filter.direction !== 'all') query.direction = filter.direction;
+    // Validated against the known channels rather than passed through. An
+    // unrecognised value would otherwise match nothing and read as "no messages"
+    // instead of a bad request.
+    if (filter.channel && filter.channel !== 'all') {
+      if (!MESSAGE_CHANNELS.includes(filter.channel as MessageChannel)) {
+        throw new AppError(
+          `Unknown channel "${filter.channel}". Expected one of: ${MESSAGE_CHANNELS.join(', ')}.`,
+          400
+        );
+      }
+      query.channel = filter.channel;
+    }
 
     const [messages, total] = await Promise.all([
       CommunicationLog.find(query)

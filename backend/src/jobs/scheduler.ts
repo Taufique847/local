@@ -1,6 +1,7 @@
 import * as cron from 'node-cron';
 import { LeadRecoveryService } from '../services/lead-recovery.service';
 import { ReviewReputationService } from '../services/review-reputation.service';
+import { AppointmentReminderService } from '../services/appointment-reminder.service';
 import { BillingService } from '../services/billing.service';
 import { DataRetentionService } from '../services/data-retention.service';
 import { LockService } from '../services/lock.service';
@@ -78,6 +79,23 @@ export class JobScheduler {
       name: 'review_sla_breaches',
       schedule: '*/15 * * * *',
       run: () => ReviewReputationService.processSlaBreaches(),
+      lockTtlMs: 10 * 60_000,
+    },
+    {
+      name: 'appointment_reminders',
+      /**
+       * Every fifteen minutes.
+       *
+       * Fine-grained enough that a reminder lands close to its configured lead
+       * time, and coarse enough that a business whose quiet-hours window has just
+       * opened does not get its whole backlog fired inside one minute. Nothing is
+       * lost between ticks: due-ness is derived from `startAt` and the claim is a
+       * durable field, not a timer.
+       */
+      schedule: '*/15 * * * *',
+      run: () => AppointmentReminderService.processDueReminders(),
+      // Comfortably longer than a full 500-appointment batch, so the lock cannot
+      // expire mid-run and admit a second instance.
       lockTtlMs: 10 * 60_000,
     },
     {

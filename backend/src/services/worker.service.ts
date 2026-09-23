@@ -5,6 +5,7 @@ import { Invoice } from '../models/invoice.model';
 import { Service } from '../models/service.model';
 import { DocumentNumberService } from './document-number.service';
 import { PolicyGuardrailsService } from './policy-guardrails.service';
+import { NotificationService } from './notification.service';
 import { generateShareToken } from '../utils/share-token';
 import { AppError } from '../types';
 
@@ -320,6 +321,16 @@ export class WorkerService {
       notes: data.notes || 'Work completed on site. Diagnostic fee credited to repair total.',
       shareToken,
     });
+
+    /**
+     * The job is finished and the customer now has a bill they can actually pay.
+     *
+     * This was the worst of the three silent invoice paths: the technician closes
+     * the work order on site and leaves, and nothing whatsoever reached the
+     * homeowner — no total, no link, no receipt. Collection depended entirely on
+     * the owner noticing and following up by hand.
+     */
+    await NotificationService.notifyInvoice(invoice, 'invoice_issued');
 
     return { appointment: apt, invoice };
   }

@@ -6,6 +6,7 @@ import { Lead } from '../models/lead.model';
 import { Business } from '../models/business.model';
 import { Technician } from '../models/technician.model';
 import { AvailabilityService } from './availability.service';
+import { NotificationService } from './notification.service';
 import { LockService, LockAcquisitionError } from './lock.service';
 import {
   CreateAppointmentInput,
@@ -89,8 +90,10 @@ export class AppointmentService {
     input: CreateAppointmentInput,
     createdBy: string = 'owner'
   ): Promise<IAppointment> {
+    let appointment: IAppointment;
+
     try {
-      return await LockService.withLock(
+      appointment = await LockService.withLock(
         AppointmentService.bookingLockKey(businessId),
         { ttlMs: AppointmentService.BOOKING_LOCK_TTL_MS, retries: 25, retryDelayMs: 120 },
         () => AppointmentService.createAppointmentUnlocked(businessId, input, createdBy)
@@ -104,6 +107,34 @@ export class AppointmentService {
       }
       throw err;
     }
+
+    /**
+     * Confirmation goes out AFTER the lock is released, and its failure cannot
+     * fail the booking.
+     *
+     * Two deliberate choices:
+     *
+     *  - Outside the lock, because an SMS and an email are two network round trips
+     *    to third parties with their own timeouts. Inside a 10-second lock they
+     *    could outlast the TTL, at which point a second booking would be admitted
+     *    while this one was still finishing — reintroducing the exact
+     *    double-booking race the lock exists to stop.
+     *  - Not awaited for success, because a confirmed appointment that the
+     *    customer was not told about is still a confirmed appointment. It is
+     *    awaited for *completion* so the log row is written before the response
+     *    returns, which keeps the behaviour testable.
+     *
+     * Quiet hours are bypassed: this is a transactional confirmation of something
+     * the customer just asked for, which is the textbook exception.
+     */
+    await NotificationService.notifyAppointment(
+      businessId,
+      appointment._id,
+      'appointment_confirmation',
+      { bypassQuietHours: true }
+    );
+
+    return appointment;
   }
 
   private static async createAppointmentUnlocked(
@@ -221,8 +252,10 @@ export class AppointmentService {
     input: RescheduleAppointmentInput
   ): Promise<IAppointment> {
     // Same race as creating: check-then-write against the same slot space.
+    let appointment: IAppointment;
+
     try {
-      return await LockService.withLock(
+      appointment = await LockService.withLock(
         AppointmentService.bookingLockKey(businessId),
         { ttlMs: AppointmentService.BOOKING_LOCK_TTL_MS, retries: 25, retryDelayMs: 120 },
         () => AppointmentService.rescheduleAppointmentUnlocked(businessId, id, input)
@@ -236,6 +269,19 @@ export class AppointmentService {
       }
       throw err;
     }
+
+    // Outside the lock, for the same reason as the booking confirmation. A moved
+    // appointment the customer was not told about is the single most expensive
+    // scheduling mistake a home-services business can make, so this is one of the
+    // messages that bypasses quiet hours.
+    await NotificationService.notifyAppointment(
+      businessId,
+      appointment._id,
+      'appointment_rescheduled',
+      { bypassQuietHours: true }
+    );
+
+    return appointment;
   }
 
   private static async rescheduleAppointmentUnlocked(
@@ -346,6 +392,20 @@ export class AppointmentService {
         }
       );
     }
+
+    /**
+     * Sent after the cancellation is durable, so the customer is never told an
+     * appointment was cancelled that in fact was not.
+     *
+     * Bypasses quiet hours: a customer who is not told is a customer waiting at
+     * home for a technician who is not coming.
+     */
+    await NotificationService.notifyAppointment(
+      businessId,
+      appointment._id,
+      'appointment_cancelled',
+      { bypassQuietHours: true }
+    );
 
     return this.getAppointmentById(businessId, id);
   }

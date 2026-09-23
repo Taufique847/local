@@ -38,6 +38,17 @@ export interface IBusinessPolicy extends Document {
    */
   laborRate: number;
   /**
+   * How long before an appointment the reminder goes out, in hours.
+   *
+   * Per business because the right lead time is a function of the trade: a
+   * maintenance visit booked three weeks out wants a day's notice, an emergency
+   * call booked this morning wants two hours. The old reminder copy hardcoded
+   * "tomorrow" — and nothing ever sent it, so the wording was never noticed.
+   */
+  reminderLeadHours: number;
+  /** Set false to stop sending appointment reminders for this business at all. */
+  appointmentRemindersEnabled: boolean;
+  /**
    * Whether callers hear a spoken notice that they are talking to an automated
    * assistant and that the conversation is captured, before the AI session
    * begins.
@@ -139,6 +150,21 @@ const businessPolicySchema = new Schema<IBusinessPolicy>(
       default: 95,
       min: 0,
       max: 10000,
+    },
+    reminderLeadHours: {
+      type: Number,
+      default: 24,
+      // At least an hour: a reminder that arrives as the van pulls up is noise.
+      min: 1,
+      // A week. This is also the ceiling the reminder job uses to size its
+      // candidate query window, so raising it widens that scan — see
+      // MAX_REMINDER_LEAD_HOURS in appointment-reminder.service.ts, which must be
+      // kept in step with this number.
+      max: 168,
+    },
+    appointmentRemindersEnabled: {
+      type: Boolean,
+      default: true,
     },
     aiDisclosureEnabled: {
       type: Boolean,

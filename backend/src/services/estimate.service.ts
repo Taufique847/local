@@ -5,6 +5,7 @@ import { Customer } from '../models/customer.model';
 import { Business } from '../models/business.model';
 import { DocumentNumberService } from './document-number.service';
 import { PolicyGuardrailsService } from './policy-guardrails.service';
+import { NotificationService } from './notification.service';
 import { AppError } from '../types';
 import { generateShareToken, isValidShareTokenFormat } from '../utils/share-token';
 
@@ -86,6 +87,16 @@ export class EstimateService {
       status: 'sent',
       shareToken,
     });
+
+    /**
+     * Actually sends it.
+     *
+     * The record was written with `status: 'sent'` and nothing was sent. The
+     * e-signature flow, the tier comparison and the approve-online portal page all
+     * existed and were unreachable, because the only copy of the share token was
+     * on the owner's screen.
+     */
+    await NotificationService.notifyEstimate(estimate);
 
     return estimate;
   }
@@ -324,6 +335,17 @@ export class EstimateService {
     estimate.status = 'converted';
     estimate.convertedInvoiceId = invoice._id;
     await estimate.save();
+
+    /**
+     * Sent after the estimate is marked converted, so a failure here cannot leave
+     * an invoice the customer has been told about but the estimate still claims is
+     * unconverted.
+     *
+     * This path builds its `Invoice` directly rather than calling
+     * `InvoiceService.createInvoice`, so it does not inherit that method's
+     * notification and needs its own.
+     */
+    await NotificationService.notifyInvoice(invoice, 'invoice_issued');
 
     return { estimate, invoice };
   }

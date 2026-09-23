@@ -109,6 +109,41 @@ const appointmentSchema = new Schema<IAppointment>(
       trim: true,
       maxlength: 500,
     },
+    /**
+     * When the reminder for this appointment was claimed by the reminder job.
+     *
+     * Doubles as the idempotence key: the job claims an appointment with an atomic
+     * conditional update on this field being null, so two scheduler instances
+     * cannot both remind the same customer. Indexed together with `startAt`
+     * because the job's selection query filters on exactly that pair.
+     */
+    reminderSentAt: {
+      type: Date,
+      default: null,
+    },
+    /**
+     * How many times the reminder job has claimed this appointment.
+     *
+     * Bounds retries. A transient provider outage un-claims the appointment so the
+     * next tick tries again, and without a counter that would retry every fifteen
+     * minutes until the appointment started.
+     */
+    reminderAttempts: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    /**
+     * Set when the customer themselves confirms, by replying to the reminder.
+     *
+     * Distinct from `status: 'confirmed'`, which the business sets. Knowing the
+     * customer personally acknowledged is what makes a no-show preventable, and
+     * the two are not interchangeable.
+     */
+    confirmedByCustomerAt: {
+      type: Date,
+      default: null,
+    },
     rescheduleHistory: {
       type: [rescheduleRecordSchema],
       default: [],
@@ -162,5 +197,8 @@ appointmentSchema.index({ businessId: 1, startAt: 1, endAt: 1 });
 appointmentSchema.index({ businessId: 1, status: 1 });
 appointmentSchema.index({ businessId: 1, customerId: 1 });
 appointmentSchema.index({ businessId: 1, serviceId: 1 });
+// Serves the reminder job's selection query, which is cross-tenant by design and
+// so cannot lead with businessId.
+appointmentSchema.index({ reminderSentAt: 1, startAt: 1, status: 1 });
 
 export const Appointment = model<IAppointment>('Appointment', appointmentSchema);

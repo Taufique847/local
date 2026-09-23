@@ -78,6 +78,11 @@ export interface IAppointment extends Document {
   customerNotes?: string;
   internalNotes?: string;
   cancellationReason?: string;
+  /** Claimed-and-attempted marker for the reminder job. See the model for why. */
+  reminderSentAt?: Date | null;
+  reminderAttempts: number;
+  /** Set when the customer replies to confirm. Not the same as `status: 'confirmed'`. */
+  confirmedByCustomerAt?: Date | null;
   rescheduleHistory: IRescheduleRecord[];
   checkIn?: ICheckInInfo;
   checkOut?: ICheckInInfo;

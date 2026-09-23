@@ -3,6 +3,7 @@ import { Invoice, IInvoice, IInvoiceItem, PaymentMethod } from '../models/invoic
 import { Customer } from '../models/customer.model';
 import { DocumentNumberService } from './document-number.service';
 import { PolicyGuardrailsService } from './policy-guardrails.service';
+import { NotificationService } from './notification.service';
 import { AppError } from '../types';
 import { generateShareToken, isValidShareTokenFormat } from '../utils/share-token';
 
@@ -65,6 +66,16 @@ export class InvoiceService {
       notes: data.notes,
       shareToken,
     });
+
+    /**
+     * The customer is told, which until now they were not.
+     *
+     * An invoice was created with `status: 'unpaid'` and a `shareToken` that only
+     * ever appeared in the owner's own dashboard, so the payment portal was
+     * unreachable by the one person meant to use it. There is no draft state and
+     * no separate "send" action on this model, so creation is issuance.
+     */
+    await NotificationService.notifyInvoice(invoice, 'invoice_issued');
 
     return invoice;
   }
@@ -229,6 +240,20 @@ export class InvoiceService {
     invoice.paidAt = new Date();
 
     await invoice.save();
+
+    /**
+     * Receipt sent from here, not from the three callers.
+     *
+     * `applyPayment` is the only place money state moves — the portal card path,
+     * the dashboard manual entry and the Stripe webhook all funnel through it — so
+     * hooking it once means no payment route can be added later that silently
+     * forgets to send a receipt.
+     *
+     * `payAmount`, not the invoice total: a partial payment gets a receipt for
+     * what was actually taken.
+     */
+    await NotificationService.notifyInvoice(invoice, 'payment_receipt', payAmount);
+
     return invoice;
   }
 

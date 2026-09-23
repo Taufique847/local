@@ -210,6 +210,10 @@ export const policySchema = z.object({
   // settings form that does not yet post it keeps working.
   taxRate: z.coerce.number().min(0).max(1).optional(),
   laborRate: z.coerce.number().min(0).max(10_000).optional(),
+  // Bounds mirror the model exactly. The upper bound also sizes the reminder
+  // job's candidate window (MAX_REMINDER_LEAD_HOURS), so the three must agree.
+  reminderLeadHours: z.coerce.number().min(1).max(168).optional(),
+  appointmentRemindersEnabled: z.boolean().optional(),
   requireDiagnosticBeforePricing: z.boolean().optional(),
   afterHoursDispatchEnabled: z.boolean().optional(),
   emergencyTransferPhone: usPhone.optional().or(z.literal('')),

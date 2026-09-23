@@ -126,9 +126,16 @@ Every customer row asserted a specific installed HVAC unit the business had neve
 | 41 | Template management | 6 literals in a `switch`, of which **only one is ever rendered**; the rest of real traffic is inline literals at ~12 call sites | No template model, no per-business override, no editor. `renderTemplate` does not even receive a `businessId`. Only per-business copy anywhere is `aiDisclosureText` (voice only) | 2 |
 | 42 | Pricing | Line items, quantity × price, tax, diagnostic credit, 3-tier estimates | The same 6 lines of arithmetic **duplicated in 3 files**. No travel fee, no discount, no coupon. `BusinessPolicy` has only `diagnosticFee`/`emergencyFee` — **no `taxRate`, no labour rate**. `emergencyFee` is quoted by the AI and **never billed**. Tax is one flat blended rate; customer state/zip never consulted. Plus BUG-A | 1.5 |
 
-Subtotal: **22.5 days** of feature work. Day 0 is done, so **~22.5 days remain** of the original 24.
+Subtotal: **22.5 days** of feature work.
 
-Two rows above are now partly addressed by the Day 0 work: #42's missing `taxRate` and labour rate exist, and #18's `technicianId` is written. The day estimates are unchanged — those were prerequisites, not the features.
+**Progress against it.** The "missing" column above describes the state *before* any of this work, and is left as written so the starting point stays checkable. Since then:
+
+- **Day 0 (defects)** — done. Also closed #42's missing `taxRate`/`laborRate` and #18's unwritten `technicianId`. Those were prerequisites, not the features, so the day estimates did not move.
+- **Days 2–5 (#38)** — done, and #38 is now fully built. Email is a real channel, all six customer-facing notifications send, and the appointment-reminder spine exists. This also unblocked #39, which the plan noted could not be started on its own.
+- **#39** — roughly half done as a side effect: reminders send with a per-business lead time, quiet-hours deferral and an atomic no-double-send claim, and `confirmedByCustomerAt` is on the model. The inbound `C`/`R` parser and the reschedule-request queue remain (Days 6–7).
+- **#41** — the "6 literals in a switch" is now one templates module covering both channels, and `renderTemplate` still does not receive a `businessId`. The per-business override model and editor are untouched, so the 2-day estimate stands.
+
+**~19 days remain** of the original 24: Day 1 (defects) and Days 2–5 (#38) are done, leaving Days 6–24. The #39 work absorbed above does not shorten Days 6–7 much — what is left there (the inbound parser, the `RescheduleRequest` model and the owner's queue) is still most of two days.
 
 ---
 
@@ -141,7 +148,27 @@ All seven fixed with 62 tests and 20 mutation checks. The day numbering below is
 
 One follow-up this surfaced, not yet done: **run the backfill in dry-run against production data** (`npm run backfill:technician-ids`) before `--apply`, and look at the ambiguous count. Jobs whose `technicianName` matches two technicians are skipped by design and need assigning by hand.
 
-### Days 2–5 · Feature 38, part 1: email becomes real
+### Days 2–5 · Feature 38, part 1: email becomes real — ✅ **done**
+
+Shipped. What landed, and the two places the plan was wrong:
+
+- `CommunicationLog` now carries email: `channel` enum `['sms','email']`, a `subject` field, a `providerMessageId` field, and a **per-channel** body cap (`sms: 1600`, `email: 20000`). The plan said "widen the enum"; that alone would not have worked — the flat `maxlength: 1600` was the Twilio segment ceiling applied to a shared log, so an email of any realistic length failed schema validation. The Twilio delivery-status webhook is now also scoped to `channel: 'sms'`, so an inbound callback cannot match an email row.
+- `backend/src/services/notification.service.ts` — one entry point, `send(businessId, type, recipient, vars, options)`, plus `notifyAppointment`, `notifyInvoice` and `notifyEstimate`. Guarantees: it never throws (a booking must not fail because a confirmation did not send), every attempt is logged on both channels including provider-not-configured failures, and the SMS leg always goes through `CommunicationService.sendMessage` so opt-out, quiet hours and From-number resolution are enforced by the same code as before.
+- `backend/src/services/notification-templates.ts` — SMS and email copy for every type in one file, with the shared email layout returning `{ text, html }`. A type with no copy for a channel returns `null`, so a missing template is a refusal to send rather than a blank message delivered. `CommunicationService.renderTemplate` is now a thin delegate to it.
+- `backend/src/utils/format.ts` — timezone-correct times, money, and address flattening. This fixed a live defect: the voice agent's confirmation formatted the appointment time with `toLocaleString` and **no `timeZone`**, so on a UTC host a 1:00 PM Phoenix job was confirmed to the customer as 8:00 PM.
+- Wired, each of which previously had no sender at all: booking confirmation, reschedule, cancellation, quote sent, invoice issued, payment receipt. The receipt hooks `applyPayment` — the single function all three payment routes funnel through — and reports the amount actually taken, not the invoice total. The hand-rolled confirmation block in `tool.registry.ts` was removed, or the voice path would have double-sent.
+- Reminder spine: `Appointment.reminderSentAt` / `reminderAttempts` / `confirmedByCustomerAt`, `BusinessPolicy.reminderLeadHours` (default 24) and `appointmentRemindersEnabled`, and the `appointment_reminders` cron job every 15 minutes. Idempotence is an **atomic conditional claim**, not a read-then-write. Quiet hours defer rather than consume. A transient provider failure releases the claim so the next tick retries, capped at 3 attempts. The reminder copy now names the real appointment time — the old template hardcoded "scheduled for tomorrow", so a two-hour lead time would have named the wrong day.
+- `reminderLeadHours` added to `policySchema` **and** to the settings UI. Without the schema entry Zod would have stripped it and Mongoose discarded it silently — the same bug class as `diagnosticFee` and `propertyType`.
+
+**Deliberately not done:** the SMS opt-out flag does not suppress email. `isOptedOut` is set only by an SMS `STOP` and its own refusal message says the customer cannot be contacted *by SMS*; transactional email is exempt from CAN-SPAM opt-out. Suppressing email off the back of it would mean a customer who stopped texts never receives their own invoice. A separate email-consent flag belongs with the campaigns on Day 13.
+
+**Verification:** 49 new tests (218 total, 14 files, all green). 24 mutations attempted, 23 caught. The one survivor — removing `reminderSentAt: null` from the reminder *candidate query* — was confirmed behaviour-neutral: the atomic claim is the real guard, and weakening **that** was caught. Backend `tsc` 0, `typecheck:tests` 0, `build` 0; frontend `tsc` 0, `build` 0; indexes synced.
+
+**Still blocked on config, not code:** `EMAIL_API_KEY` is empty, so no email has left the building yet. Every email path is exercised with the sender stubbed and records a `failed` row with `errorCode: 'email_not_configured'` in production until the key is set. Nothing else has to change when it is.
+
+<details>
+<summary>Original plan for Days 2–5</summary>
+
 - **Day 2 (half)–3** — Make email loggable and sendable as a channel.
   - `CommunicationLog`: widen `channel` enum to `['sms','email']`; make `from`/`to` tolerate an address; add a `subject` field.
   - New `backend/src/services/notification.service.ts` — one entry point that takes `(businessId, type, recipient, vars)`, picks channel(s), renders, sends via `CommunicationService` or `EmailService`, and logs both identically. Every existing inline literal moves behind it over Days 4 and 11.
@@ -155,8 +182,10 @@ One follow-up this surfaced, not yet done: **run the backfill in dry-run against
   - Reminder lead time as a per-business setting on `BusinessPolicy` (`reminderLeadHours`, default 24).
   - *Verify:* tests for the selection window, the idempotence of `reminderSentAt`, and quiet-hours deferral.
 
+</details>
+
 ### Days 6–7 · Feature 39: customers can confirm or reschedule by reply
-- **Day 6** — Inbound reply handling. Reminder copy changes to instruct explicitly (`Reply C to confirm, R to reschedule`) — the current text says "let us know if you need to reschedule" with nothing that parses such a reply. Add a keyword branch *before* the opt-in check that resolves the customer's next appointment and stamps `confirmedByCustomerAt`. Send an acknowledgement.
+- **Day 6** — Inbound reply handling. `Appointment.confirmedByCustomerAt` already exists (added Day 5). Add a keyword branch *before* the opt-in check that resolves the customer's next appointment, stamps `confirmedByCustomerAt` and acknowledges — **then** change the reminder copy to `Reply C to confirm, R to reschedule`. The order matters: the copy was deliberately left off on Day 5 because nothing parses C or R, and an instruction the system silently drops leaves the customer believing they rescheduled. A test in `tests/notifications/email-channel.test.ts` currently asserts the copy does *not* contain it; delete that assertion in the same change that adds the parser.
 - **Day 7** — Reschedule requests. New `RescheduleRequest` model (pending/resolved, requested window, source). `R` creates one and replies with the nearest available slots from `AvailabilityService.getAvailableSlots`. Owner sees a queue and one-click applies via the existing `rescheduleAppointment`. Unmatched inbound SMS stops being silently dropped — it lands in an owner-visible "needs attention" list.
   - *Verify:* tests for C, R, an unmatched message, and a reply from a number with no appointment.
 
