@@ -1,3 +1,22 @@
+> ## ⚠️ This is the vision, not the build
+>
+> **Nothing here describes what exists.** This is the north-star feature specification — all 86
+> numbered features across sections A–J — written before construction. It is the document
+> `FINAL.md` counts against, and it is deliberately left unedited so that count stays meaningful:
+> if the target moved every time something shipped, "36 of 86" would mean nothing.
+>
+> As of 23 September 2026: **36 built, 5 partial, 45 not started** (~45% weighted). See `FINAL.md`
+> for the feature-by-feature status and `partial.md` for what is outstanding and in what order.
+>
+> Two things to know before reading:
+>
+> - **The product is called BlueCollar AI.** This document calls it LocalOps AI, which was the
+>   working name when it was written. Every other document, the code and the UI all say BlueCollar.
+> - **A large part of section J (items 68–86) is enterprise scale-out** — Super Admin console,
+>   multi-location, feature flags, audit logging, abuse controls. None of it is built, and none of
+>   it is needed for a first paying customer. Treat the 86 as a long-term target, not a launch
+>   checklist.
+
 # LocalOps AI
 ## US Local Service Businesses ke liye AI Operations, Booking aur Growth SaaS
 
