@@ -14,6 +14,7 @@
     "sync-indexes": "tsx src/scripts/sync-indexes.ts",
     "backfill:technician-ids": "tsx src/scripts/backfill-technician-ids.ts",
     "migrate:property-memories": "tsx src/scripts/migrate-property-memories.ts",
+    "backfill:customer-rollups": "tsx src/scripts/backfill-customer-rollups.ts",
     "sync-indexes:prod": "node dist/src/scripts/sync-indexes.js"
   },
   "keywords": [

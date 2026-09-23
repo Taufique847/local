@@ -52,10 +52,36 @@ const customerSchema = new Schema<ICustomer>(
       default: [],
       index: true,
     },
+    /**
+     * Total money actually received from this customer.
+     *
+     * Declared since the first version of this schema and written by nothing, so it
+     * was permanently `0` — `customer-360.service.ts` even computes a fallback on
+     * read because the stored value could never be trusted. That made it useless for
+     * filtering: a "customers worth more than $500" segment would always be empty.
+     *
+     * Now incremented in `InvoiceService.applyPayment`, the single function every
+     * payment route funnels through. Payments received, not invoices raised: an
+     * unpaid invoice is not lifetime value.
+     */
     lifetimeValue: {
       type: Number,
       default: 0,
       min: 0,
+      index: true,
+    },
+    /**
+     * When work was last completed for this customer.
+     *
+     * Denormalised deliberately. Deriving it per query means an aggregation over
+     * appointments for every segment count on the page, and segment counts are shown
+     * live next to each saved segment. Maintained on the completion path and
+     * backfillable with `npm run backfill:customer-rollups`.
+     */
+    lastServiceAt: {
+      type: Date,
+      default: null,
+      index: true,
     },
     serviceAddresses: [
       {

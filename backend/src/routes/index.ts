@@ -28,6 +28,7 @@ import teamRoutes from './team.routes';
 import { rescheduleRequestRoutes } from './reschedule-request.routes';
 import { messageTemplateRoutes } from './message-template.routes';
 import { equipmentRoutes } from './equipment.routes';
+import { customerSegmentRoutes } from './customer-segment.routes';
 
 const apiRouter = Router();
 
@@ -40,6 +41,7 @@ apiRouter.use('/onboarding', onboardingRoutes);
 apiRouter.use('/dashboard', dashboardRoutes);
 apiRouter.use('/customers', customerRoutes);
 apiRouter.use('/equipment', equipmentRoutes);
+apiRouter.use('/segments', customerSegmentRoutes);
 apiRouter.use('/leads', leadRoutes);
 apiRouter.use('/services', serviceRoutes);
 apiRouter.use('/appointments', appointmentRoutes);

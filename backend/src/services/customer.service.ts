@@ -7,6 +7,25 @@ import {
   PaginatedCustomers 
 } from '../types/customer.types';
 import { AppError } from '../types';
+import { buildCustomerQuery, sanitiseCustomerFilter } from './customer-filter';
+
+/**
+ * Tags, normalised the same way everywhere.
+ *
+ * Upper-cased and deduplicated because tags are matched exactly by the segment
+ * filter — `$in: ['VIP']` will not find a customer tagged `vip`, so two spellings of
+ * one tag means a segment that silently misses half its audience. The 360 drawer
+ * already upper-cases on input; this makes it true of every write path.
+ */
+const normaliseTags = (tags: string[] | undefined): string[] => {
+  if (!tags) return [];
+  const seen = new Set<string>();
+  for (const tag of tags) {
+    const clean = String(tag).trim().toUpperCase().slice(0, 40);
+    if (clean) seen.add(clean);
+  }
+  return [...seen].slice(0, 20);
+};
 
 export class CustomerService {
   private static toDTO(customer: ICustomer): CustomerDTO {
@@ -20,6 +39,17 @@ export class CustomerService {
       email: customer.email,
       address: customer.address,
       notes: customer.notes,
+      /**
+       * Tags, lifetime value and last service date were all absent from this DTO.
+       *
+       * `tags` in particular is the whole basis of segmentation: the field was
+       * indexed, editable in the 360 drawer and returned by nothing, so the list API
+       * could not show a tag and the two tag dropdowns on the customers page had no
+       * data to filter against.
+       */
+      tags: customer.tags ?? [],
+      lifetimeValue: customer.lifetimeValue ?? 0,
+      lastServiceAt: customer.lastServiceAt ?? null,
       isOptedOut: Boolean(customer.isOptedOut),
       optedOutAt: customer.optedOutAt,
       propertyType: customer.propertyType,
@@ -56,6 +86,9 @@ export class CustomerService {
       source: input.source || 'manual',
       propertyType: input.propertyType,
       property: input.property,
+      // Accepted by the validation schema and then dropped here, so a customer
+      // created with tags came back without them.
+      tags: normaliseTags(input.tags),
     });
 
     return this.toDTO(customer);
@@ -70,36 +103,17 @@ export class CustomerService {
     const limit = Math.min(100, Math.max(1, Number(queryInput.limit) || 10));
     const skip = (page - 1) * limit;
 
-    const filter: Record<string, any> = { businessId };
-
-    // Status filter
-    if (queryInput.status && ['active', 'inactive'].includes(queryInput.status)) {
-      filter.status = queryInput.status;
-    }
-
     /**
-     * Property-type filter.
+     * Built by the shared filter builder, not assembled here.
      *
-     * The customers page has always sent this parameter. Nothing here read it, so
-     * it was silently discarded and the dropdown appeared to do nothing.
+     * The ad-hoc list, a saved segment's live count and a campaign's audience must
+     * resolve to the identical query — otherwise a segment reading "42 customers"
+     * sends to 39, and nobody can tell which number was wrong.
+     *
+     * This also fixed an unescaped regex: the search term went straight into
+     * `new RegExp(...)`, so searching for "(" threw and returned a 500.
      */
-    if (
-      queryInput.propertyType &&
-      ['residential', 'commercial'].includes(queryInput.propertyType)
-    ) {
-      filter.propertyType = queryInput.propertyType;
-    }
-
-    // Search query (matches first name, last name, phone, or email)
-    if (queryInput.search && queryInput.search.trim()) {
-      const searchRegex = new RegExp(queryInput.search.trim(), 'i');
-      filter.$or = [
-        { firstName: searchRegex },
-        { lastName: searchRegex },
-        { phone: searchRegex },
-        { email: searchRegex },
-      ];
-    }
+    const filter = await buildCustomerQuery(businessId, sanitiseCustomerFilter(queryInput));
 
     const [customers, total] = await Promise.all([
       Customer.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
@@ -147,6 +161,9 @@ export class CustomerService {
     if (input.notes !== undefined) customer.notes = input.notes.trim();
     if (input.status !== undefined) customer.status = input.status;
     if (input.propertyType !== undefined) customer.propertyType = input.propertyType;
+    // Writable here as well as through the dedicated tags endpoint. The general
+    // update accepted `tags` in its schema and then never applied them.
+    if (input.tags !== undefined) customer.tags = normaliseTags(input.tags);
 
     /**
      * Merged, not replaced, and field by field.

@@ -89,6 +89,19 @@ export interface Customer {
   status: CustomerStatus;
   propertyType?: 'residential' | 'commercial';
   property?: CustomerProperty;
+  /**
+   * Upper-cased and deduplicated server-side, because segment filters match them
+   * exactly — two spellings of one tag would mean a segment silently missing half its
+   * audience.
+   *
+   * The list API omitted these from its response entirely until segments were built,
+   * which is why the customers page had tag dropdowns with nothing to filter on.
+   */
+  tags?: string[];
+  /** Total payments received. Maintained on the payment path. */
+  lifetimeValue?: number;
+  /** When work was last completed. Null when never serviced. */
+  lastServiceAt?: string | null;
   /** True once the customer has texted STOP. They cannot be sent SMS. */
   isOptedOut?: boolean;
   optedOutAt?: string | null;

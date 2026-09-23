@@ -1,6 +1,6 @@
 # BlueCollar AI — Final Feature Status
 
-> **Verified:** 23 September 2026, by reading `backend/src` and `frontend/app` directly, by running the built server against a live database, and by a 219-test automated suite whose guards were each confirmed by deliberately breaking them.
+> **Verified:** 23 September 2026, by reading `backend/src` and `frontend/app` directly, by running the built server against a live database, and by a 377-test automated suite whose guards were each confirmed by deliberately breaking them.
 >
 > Reference vision: `targetFeaturesIdea.md` (86 numbered features, sections A–J).
 > This file supersedes the status sections of `PROJECT_STATUS_AND_ROADMAP.md`, which was written before the Week 1–4 hardening, Tier 1/Tier 2 work and QA bug fixes landed.
@@ -11,10 +11,10 @@
 
 | Measure | Value |
 |---|---|
-| Features **fully built and verified** | **33 of 86** (~38%) |
-| Features **partially built** (usable but incomplete) | **8 of 86** (~9%) |
+| Features **fully built and verified** | **37 of 86** (~43%) |
+| Features **partially built** (usable but incomplete) | **4 of 86** (~5%) |
 | Features **not started** | **45 of 86** (~52%) |
-| Weighted completion against the full vision | **~43%** (built = 1, partial = 0.5 → 33 + 4 = 37 of 86) |
+| Weighted completion against the full vision | **~45%** (built = 1, partial = 0.5 → 37 + 2 = 39 of 86) |
 | Completion against a **launchable MVP** (§7 of the vision doc) | **~90%** |
 
 Two different questions, two different answers:
@@ -22,7 +22,7 @@ Two different questions, two different answers:
 - **"Is the 86-feature enterprise platform done?"** No — a bit over a third.
 - **"Is there a product a contractor could pay for?"** Nearly. What blocks it now is one thing: the voice pipeline has never handled a real call.
 
-> **Counting note.** An earlier revision of this file claimed 26 built / 13 partial. That headline never matched its own tables — counting the numbered rows below gives 33 and 8. The tables were right; the summary was wrong. Numbers here are now derived from the tables by counting ✅ and 🟡 rows, and the weighting formula is stated inline rather than left implicit — the previous "~38%" had no stated derivation, so it could not be checked.
+> **Counting note.** An earlier revision of this file claimed 26 built / 13 partial. That headline never matched its own tables — counting the numbered rows below gives 37 and 4. The tables were right; the summary was wrong. Numbers here are now derived from the tables by counting ✅ and 🟡 rows, and the weighting formula is stated inline rather than left implicit — the previous "~38%" had no stated derivation, so it could not be checked.
 
 The estimate in `PROJECT_STATUS_AND_ROADMAP.md` was 18–20%. The rise is mostly hardening and correctness rather than new surface area: the voice pipeline became real, the security holes closed, a large amount of fabricated data was removed, and the product gained the two things that stop it being single-user — staff accounts and a password recovery path.
 
@@ -48,9 +48,9 @@ Each row was confirmed in code, and where marked ✓runtime, exercised against a
 |---|---|---|---|
 | 8 | Lead pipeline | ✅ Built | Status machine with validated transitions. |
 | 9 | Customer CRM profile | ✅ Built | Customer 360 view aggregating appointments, invoices, calls, memories. |
-| 10 | Property notes | 🟡 Partial | Free-text notes and agent memories exist. No structured gate-code/pet/equipment fields, no per-field access control. |
+| 10 | Property notes | ✅ Built | Structured `Customer.property` (gate code, access instructions, pets, parking) and a real `Equipment` model (type, brand, model, serial, install year, filter size, location, warranty). `hasPets` is tri-state — "not asked" is not "no pets". Transcript extraction writes the structured field *and* keeps the memory row for provenance, and never overwrites what a person entered. The voice prompt and the dispatch text both read the fields. Still no per-field access control: the gate code is plain text and visible to any staff login, which is flagged in the model. |
 | 12 | Lost-lead follow-up | ✅ Built | Drip campaign with backoff, attempt cap and honest failure recording. |
-| 13 | Customer segmentation | 🟡 Partial | Tags exist and are editable. No saved segments or segment-driven campaigns. |
+| 13 | Customer segmentation | ✅ Built | Tags now reach the list API at all — they were indexed, editable and omitted from the DTO, so the page's tag filters had nothing to filter on. Saved `CustomerSegment` records with live (never cached) counts, filters on tags in/all/none, lifetime value, last service date, never-serviced, property type and equipment brand, and campaigns that send through `NotificationService` per recipient so quiet hours and the SMS opt-out apply. Campaign texts are refused without an opt-out notice; capped at 500 recipients. Also closed two fields nothing wrote: `lifetimeValue` (permanently 0) and `lastServiceAt` (absent), without which two of these filters could never match. |
 
 ### C. Calendar, booking and dispatch
 
@@ -88,8 +88,8 @@ Each row was confirmed in code, and where marked ✓runtime, exercised against a
 |---|---|---|---|
 | 35 | Two-way SMS inbox | ✅ Built | Threads, send, inbound handling, failure reasons shown inline. |
 | 38 | Automated notifications | ✅ Built | One `NotificationService` sends on both SMS and email, renders from one template set, and logs both channels identically in `CommunicationLog`. Wired: booking confirmation, reschedule, cancellation, appointment reminder, quote sent, invoice issued, payment receipt. Never throws, so a provider outage cannot fail a booking; a failed send is recorded with a cause rather than silently dropped. **`EMAIL_API_KEY` is unset, so no email has actually left the server** — the path is exercised with the sender stubbed, and logs a `failed` row with `errorCode: 'email_not_configured'` until the key is set. |
-| 39 | Reminder controls | 🟡 Partial | Appointment reminders now exist and run: `appointment_reminders` cron every 15 min, per-business `reminderLeadHours` (default 24) and an on/off switch, atomic claim so a reminder cannot double-send, quiet-hours deferral, bounded retry on provider failure. Still missing the **customer-facing confirm/reschedule reply** — `confirmedByCustomerAt` is on the model but nothing parses an inbound `C`/`R`, so the reminder copy deliberately does not offer it yet. |
-| 41 | Template management | 🟡 Partial | Templates exist in code with variables. No per-business template editor. |
+| 39 | Reminder controls | ✅ Built | `appointment_reminders` cron every 15 min, per-business `reminderLeadHours` (default 24) and an on/off switch, atomic claim so a reminder cannot double-send, quiet-hours deferral, bounded retry. Customers reply `C` to confirm (idempotent, stamps `confirmedByCustomerAt`) or `R` to open a `RescheduleRequest` with real alternative slots, which the owner applies from a queue through the same locked reschedule path the calendar uses. Keywords match exactly — prose goes to a human rather than being guessed at. Unmatched inbound SMS is flagged on arrival and surfaced in an Action Queue instead of being silently dropped. |
+| 41 | Template management | ✅ Built | `MessageTemplate` keyed `{businessId, type, channel}` with per-channel on/off and `{{variable}}` substitution against a declared variable set per message type. An override table, not a replacement: a business with no rows sends exactly what it sent before, which matters because the shipped copy carries the carrier-expected opt-out notice. Unknown placeholders are rejected at save time, an SMS override must keep an opt-out notice where the default has one, and a disabled channel is refused even when a caller names it explicitly. Owner-gated editor at `/app/settings/notifications` with server-side preview. |
 
 ### G. Pricing, invoicing and payments
 
@@ -129,7 +129,7 @@ Each row was confirmed in code, and where marked ✓runtime, exercised against a
 | Password reset by email, single-use, revokes all sessions | ✅ Built ✓tested (send path unexercised) |
 | Staff invitations — email link, single use, tenant-bound | ✅ Built ✓tested (send path unexercised) |
 | Media-stream WebSocket authorization (single-use signed token) | ✅ Built ✓tested |
-| Automated test suite — 219 tests over tenancy, money, auth, pricing and notifications | ✅ Built, wired into CI |
+| Automated test suite — 377 tests over tenancy, money, auth, pricing, notifications and segments | ✅ Built, wired into CI |
 | Data retention sweep + per-customer data erasure | ✅ Built |
 | AI/recording disclosure spoken before the assistant answers | ✅ Built |
 | Docker, compose, CI (typecheck/build/secrets/image) | ✅ Built |
@@ -150,7 +150,7 @@ Each row was confirmed in code, and where marked ✓runtime, exercised against a
 | A2 | **Password reset flow** | ✅ Done | There was no recovery path at all — a forgotten password meant permanent lockout. | — |
 | A3 | **Commit the work** | ✅ Done | Committed in four logical commits on `feat/staff-accounts-rbac-and-tests` and pushed. Verified no `.env`, key material or temp file entered any commit. | — |
 | ~~A4~~ | ~~**Rotate the leaked credential**~~ | ❌ **Withdrawn — was never true** | See below. | — |
-| A5 | **Tests for the money and tenancy paths** | ✅ Done | The QA pass found a critical cross-tenant hole precisely because nothing guarded these. 219 tests now cover worker tenant + per-technician scoping, portal share tokens, Stripe and Twilio webhook signatures, RBAC, password reset, invitations, the media-stream token, job-completion pricing and SMS consent. | — |
+| A5 | **Tests for the money and tenancy paths** | ✅ Done | The QA pass found a critical cross-tenant hole precisely because nothing guarded these. 377 tests now cover worker tenant + per-technician scoping, portal share tokens, Stripe and Twilio webhook signatures, RBAC, password reset, invitations, the media-stream token, job-completion pricing, SMS consent, notification templates, equipment and property data, and segment campaigns. | — |
 
 **On defects found since.** Writing `partial.md` — a day-by-day plan to finish the nine partial features — required reading all nine at model, service, controller and page level. That read turned up **seven defects in shipped code**, all now fixed with tests and mutation checks. Four shared one root cause worth naming: code reading or writing a field that does not exist on the schema, which Mongoose silently tolerates in both directions. The worst of them meant a customer who texted STOP kept receiving messages. Details in `partial.md` §2.
 
@@ -183,7 +183,7 @@ Committing a cookie jar is still poor hygiene, and the CI check that fails on tr
 | B1 | **Real AI post-call summary and coaching** | Today's "AI Summary" is an if/else on outcome producing canned sentences. One extra structured OpenAI call on the existing transcript makes it real. Highest demo impact per hour spent. | 1 day |
 | ~~B2~~ | ~~**Staff accounts + real RBAC**~~ | ✅ **Done.** See feature 59. Dispatchers and technicians have their own logins, billing is owner-only, and a technician sees only their own jobs. | — |
 | B3 | **Auto follow-up on unsold estimates** | The drip infrastructure already exists; point it at estimates with no response after 7 days. | ½ day |
-| B4 | **Equipment and unit registry** | Brand, model, install year, filter size per customer property. Foundational — pre-job briefs and upsell suggestions both depend on it. | 1–2 days |
+| B4 | ~~**Equipment and unit registry**~~ | ✅ **Done.** `Equipment` model with brand, model number, serial, install year, filter size, location and warranty, surfaced in the customer drawer and injected into both the voice prompt and the technician dispatch text. | — |
 | B5 | **Stripe Connect / per-business payouts** | Contractors cannot actually collect their own customers' money into their own account yet. | 3–5 days |
 | B6 | **Emergency triage confidence score** | Turn the keyword list into a context-aware `assess_urgency` tool. Reduces missed-emergency liability. | 1 day |
 | B7 | ~~**Email notifications**~~ | ✅ **Done.** `NotificationService` + `notification-templates.ts` send booking confirmations, reschedules, cancellations, reminders, quotes, invoices and receipts on SMS and email from one template set. The only thing outstanding is operational: set `EMAIL_API_KEY`. | — |
@@ -251,7 +251,7 @@ Worth knowing before a demo, because each one reads as finished in the UI.
 | Job-completion pricing | Automated — a $450 service bills 450, per-business tax and labour rates, diagnostic credit against the taxable base |
 | Technician assignment | Automated through the real booking path — cross-tenant and inactive technicians refused, name derived from the record |
 | SMS consent | Automated — STOP persists and blocks sending, START restores, no duplicate booking from a consent reply |
-| **Automated tests** | ✅ 219 tests, 14 files, in CI. Mutation-checked: 51 deliberate regressions attempted, 50 caught — the one survivor was verified behaviour-neutral (a redundant query filter whose load-bearing twin *was* caught) |
+| **Automated tests** | ✅ 377 tests, 18 files, in CI. Mutation-checked: 143 deliberate regressions attempted, 140 caught. The three survivors were each verified behaviour-neutral and documented in place — two redundant tenant clauses whose load-bearing twins *were* caught, and one guard that turned out to be unreachable and was deleted rather than left implying a check that could never fire |
 | **Voice pipeline end to end** | ❌ Never — no provider keys |
 | **Email delivery** | ❌ Never — no `EMAIL_API_KEY`. Reset and invite flows are tested with the sender stubbed, so the token lifecycle is proven and the Resend call is not |
 | **Live card payment** | ❌ Never — Stripe in simulation mode |
@@ -263,7 +263,7 @@ Worth knowing before a demo, because each one reads as finished in the UI.
 
 The foundation is genuinely good now. The security holes that mattered are closed, the fabricated data that made the product look further along than it was has been removed, the parts that exist mostly do what they claim, and for the first time there is a test suite that would notice if that stopped being true.
 
-The gap between ~38% of the vision and a shippable product is smaller than it looks, because the remaining 62% is largely enterprise scale-out that a first customer does not need.
+The gap between ~45% of the vision and a shippable product is smaller than it looks, because the remaining 55% is largely enterprise scale-out that a first customer does not need.
 
 What still stands between this and revenue is now a single item:
 

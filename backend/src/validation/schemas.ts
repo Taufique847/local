@@ -444,6 +444,44 @@ export const appointmentStatusSchema = z.object({
  * which field was wrong.
  */
 /**
+ * A saved customer segment.
+ *
+ * `filter` is deliberately `unknown` here and narrowed by `sanitiseCustomerFilter` in
+ * the service. Declaring the filter's shape twice — once in Zod, once in the
+ * sanitiser that decides what may be persisted — would let the two drift, and the
+ * sanitiser is the one that matters because it guards what goes into the database.
+ */
+export const customerSegmentSchema = z.object({
+  name: trimmed(80).min(1, 'Give the segment a name'),
+  description: trimmed(300).optional(),
+  filter: z.record(z.string(), z.unknown()),
+});
+
+export const updateCustomerSegmentSchema = z
+  .object({
+    name: trimmed(80).min(1).optional(),
+    description: z.union([trimmed(300), z.literal('')]).optional(),
+    filter: z.record(z.string(), z.unknown()).optional(),
+  })
+  .refine((data) => Object.keys(data).length > 0, {
+    message: 'Provide at least one field to update',
+  });
+
+/**
+ * A campaign send.
+ *
+ * `body` is capped at the email ceiling; the service narrows it to 1600 for SMS and
+ * separately requires an opt-out notice on that channel.
+ */
+export const segmentCampaignSchema = z.object({
+  channel: z.enum(['sms', 'email']),
+  body: z.string().trim().min(1, 'Write the message you want to send').max(20_000),
+  subject: trimmed(200).optional(),
+  /** Returns the audience size without sending anything. */
+  dryRun: z.boolean().optional(),
+});
+
+/**
  * Customer equipment.
  *
  * `type` is the only required field: a technician told "there is a Carrier unit

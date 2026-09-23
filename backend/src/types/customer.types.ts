@@ -1,4 +1,5 @@
 import { Document, Types } from 'mongoose';
+import type { CustomerFilterInput } from '../services/customer-filter';
 
 export type CustomerStatus = 'active' | 'inactive';
 
@@ -40,6 +41,8 @@ export interface ICustomer extends Document {
   serviceAddresses: ICustomerAddress[];
   tags: string[];
   lifetimeValue: number;
+  /** When work was last completed. Null when never serviced. */
+  lastServiceAt?: Date | null;
   notes?: string;
   /** Set when identifying fields were scrubbed in response to a deletion request. */
   personalDataErasedAt?: Date | null;
@@ -83,6 +86,7 @@ export interface CustomerDTO {
   serviceAddresses?: ICustomerAddress[];
   tags?: string[];
   lifetimeValue?: number;
+  lastServiceAt?: string | Date | null;
   notes?: string;
   /**
    * Surfaced so the UI can show that this customer cannot be texted, instead of
@@ -114,13 +118,16 @@ export interface CustomerInput {
   property?: ICustomerProperty;
 }
 
-export interface CustomerQueryInput {
+/**
+ * Query parameters for the customer list.
+ *
+ * Extends the storable segment filter, so the ad-hoc list and a saved segment accept
+ * exactly the same vocabulary — that is what makes "save this search as a segment"
+ * more than a coincidence.
+ */
+export interface CustomerQueryInput extends CustomerFilterInput {
   page?: number;
   limit?: number;
-  search?: string;
-  status?: string;
-  tag?: string;
-  propertyType?: string;
 }
 
 export interface PaginatedCustomers {

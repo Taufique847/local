@@ -639,6 +639,20 @@ export class AppointmentService {
     // with the rules and gets a much better response rate than texting the
     // customer while the technician is still in the driveway.
     if (status === 'completed') {
+      /**
+       * Stamps the customer's last service date.
+       *
+       * `$max` rather than a plain set, so completing an old appointment out of order
+       * — a technician closing last week's job today — cannot drag the date backwards
+       * past a more recent one.
+       */
+      await Customer.updateOne(
+        { _id: appointment.customerId, businessId },
+        { $max: { lastServiceAt: appointment.startAt } }
+      ).catch((err: any) =>
+        console.warn('Could not stamp customer lastServiceAt:', err?.message)
+      );
+
       try {
         const { ReviewReputationService } = await import('./review-reputation.service');
         await ReviewReputationService.schedulePostServiceSurvey(appointment._id).catch((err) => {

@@ -242,6 +242,27 @@ export class InvoiceService {
     await invoice.save();
 
     /**
+     * Lifetime value, which nothing used to write.
+     *
+     * The field has existed on `Customer` since the beginning and no code path ever
+     * set it, so it was permanently `0` and `customer-360.service.ts` computed a
+     * fallback on read because the stored value could not be trusted. Hooked here
+     * because this is the single function the portal card path, the dashboard manual
+     * entry and the Stripe webhook all funnel through.
+     *
+     * Payments received, not invoices raised — an unpaid invoice is not lifetime
+     * value — and incremented by `payAmount` so a partial payment counts for what was
+     * actually taken.
+     *
+     * `$inc`, not read-modify-write: two payments settling concurrently would
+     * otherwise lose one of them.
+     */
+    await Customer.updateOne(
+      { _id: invoice.customerId, businessId: invoice.businessId },
+      { $inc: { lifetimeValue: payAmount } }
+    ).catch((err: any) => console.warn('Could not update customer lifetimeValue:', err?.message));
+
+    /**
      * Receipt sent from here, not from the three callers.
      *
      * `applyPayment` is the only place money state moves — the portal card path,

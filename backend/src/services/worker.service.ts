@@ -1,6 +1,7 @@
 import { Types } from 'mongoose';
 import { Appointment } from '../models/appointment.model';
 import { Technician } from '../models/technician.model';
+import { Customer } from '../models/customer.model';
 import { Invoice } from '../models/invoice.model';
 import { Service } from '../models/service.model';
 import { DocumentNumberService } from './document-number.service';
@@ -214,6 +215,19 @@ export class WorkerService {
       address: apt.address,
     };
     await apt.save();
+
+    /**
+     * Same rollup as the dashboard completion path.
+     *
+     * This path sets `status` directly rather than going through
+     * `AppointmentService.updateStatus`, so it does not inherit that method's
+     * side effects and needs its own. `$max` guards against a technician closing an
+     * older job after a newer one.
+     */
+    await Customer.updateOne(
+      { _id: apt.customerId, businessId: apt.businessId },
+      { $max: { lastServiceAt: apt.startAt } }
+    ).catch((err: any) => console.warn('Could not stamp customer lastServiceAt:', err?.message));
 
     /**
      * Rates come from the business's own policy, not from literals in this file.
