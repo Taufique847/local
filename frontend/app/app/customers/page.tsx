@@ -203,9 +203,11 @@ export default function CustomersPage() {
                 }}
                 className="h-9 px-3 rounded-md border border-slate-200 bg-white text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-slate-900"
               >
+                {/* 'Lead' was offered here and is not a Customer status — the
+                    enum is active | inactive. Selecting it filtered nothing.
+                    Leads are a separate record type, under /app/leads. */}
                 <option value="all">All Statuses</option>
                 <option value="active">Active</option>
-                <option value="lead">Lead</option>
                 <option value="inactive">Inactive</option>
               </select>
 
@@ -294,14 +296,23 @@ export default function CustomersPage() {
                               <p className="font-semibold text-slate-900">
                                 {cust.firstName} {cust.lastName}
                               </p>
+                              {/*
+                                A "Carrier 4T Split (410A)" / "Carrier 10T RTU"
+                                equipment badge used to render here, chosen purely
+                                from propertyType. It was invented — no equipment
+                                is recorded against a customer anywhere in the
+                                product — so every row asserted a specific unit the
+                                business had never entered.
+                              */}
                               <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
-                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-700 border border-slate-200/80">
-                                  <Wrench className="w-2.5 h-2.5 text-blue-600" />
-                                  {cust.propertyType === 'commercial' ? 'Carrier 10T RTU' : 'Carrier 4T Split (410A)'}
-                                </span>
                                 <span className="text-[10px] text-slate-400 font-normal">
-                                  • {new Date(cust.createdAt).toLocaleDateString()}
+                                  Added {new Date(cust.createdAt).toLocaleDateString()}
                                 </span>
+                                {cust.isOptedOut && (
+                                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-rose-50 text-rose-700 border border-rose-200">
+                                    Texts off
+                                  </span>
+                                )}
                               </div>
                             </div>
                           </div>
@@ -338,11 +349,17 @@ export default function CustomersPage() {
                           )}
                         </td>
 
-                        {/* Property Type */}
+                        {/* Property type. Was `|| 'Residential'`, which asserted
+                            residential for every customer because the field was
+                            never persisted. Now shows what was actually recorded. */}
                         <td className="py-3.5 px-4">
-                          <span className="capitalize text-slate-700 font-medium">
-                            {cust.propertyType || 'Residential'}
-                          </span>
+                          {cust.propertyType ? (
+                            <span className="capitalize text-slate-700 font-medium">
+                              {cust.propertyType}
+                            </span>
+                          ) : (
+                            <span className="text-slate-400">&mdash;</span>
+                          )}
                         </td>
 
                         {/* Status */}

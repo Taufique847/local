@@ -86,6 +86,39 @@ const customerSchema = new Schema<ICustomer>(
       type: Date,
       default: null,
     },
+    /**
+     * SMS consent. True once the customer has texted a carrier opt-out keyword.
+     *
+     * This field was missing entirely while two code paths in
+     * `communication.service.ts` read and wrote it through `as any`. Mongoose is
+     * strict by default, so the write was silently dropped on every save and the
+     * read was always `undefined` — meaning a customer who texted STOP kept
+     * receiving messages. That is a TCPA violation, not a cosmetic bug.
+     */
+    isOptedOut: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    /** Audit trail for the opt-out, which a TCPA complaint would ask for. */
+    optedOutAt: {
+      type: Date,
+      default: null,
+    },
+    /**
+     * Residential or commercial.
+     *
+     * The customer form has always had a toggle for this and five screens have
+     * always displayed it, but it was never declared here — so Mongoose stripped
+     * it on every save and all five screens showed "Residential" for everyone.
+     * Left optional rather than defaulted, so an existing record reads as
+     * "not recorded" instead of being silently asserted to be residential.
+     */
+    propertyType: {
+      type: String,
+      enum: ['residential', 'commercial'],
+      index: true,
+    },
   },
   {
     timestamps: true,

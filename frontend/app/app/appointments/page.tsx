@@ -35,8 +35,7 @@ import {
   UserCheck,
   RefreshCw,
   MapPin,
-  Navigation,
-  Send,
+  Construction,
 } from 'lucide-react';
 
 const STATUS_CONFIG: Record<AppointmentStatus, { label: string; badge: string; dot: string }> = {
@@ -79,10 +78,9 @@ const PRIORITY_BADGES: Record<string, string> = {
   low: 'bg-slate-100 text-slate-600 border-slate-200 font-normal',
 };
 
-import { useToast } from '@/components/ui/toast';
-
 export default function AppointmentsPage() {
-  const toast = useToast();
+  // The toast hook was here only to fake a "route dispatched" confirmation for a
+  // button that called no API. Removed with the rest of that panel.
   const [viewMode, setViewMode] = useState<'calendar' | 'list' | 'map'>('calendar');
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [loading, setLoading] = useState(true);
@@ -284,7 +282,11 @@ export default function AppointmentsPage() {
                 }`}
               >
                 <MapPin className="w-3.5 h-3.5 text-blue-600" />
-                Dispatch Route Map
+                Route Map
+                {/* Labelled so nobody expects working routing behind it. */}
+                <span className="text-[9px] font-bold uppercase tracking-wider text-amber-600">
+                  Soon
+                </span>
               </button>
             </div>
 
@@ -862,155 +864,91 @@ export default function AppointmentsPage() {
             )}
           </div>
         ) : (
-          /* ================= DALLAS DISPATCH ROUTE MAP VIEW ================= */
-          <div className="bg-white border border-slate-200/90 rounded-2xl p-5 shadow-xs space-y-5">
-            {/* Map Header & Clustered Route Metrics */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
-              <div className="space-y-0.5">
-                <div className="flex items-center gap-2">
-                  <h2 className="text-sm sm:text-base font-bold text-slate-900 flex items-center gap-2">
-                    <Navigation className="w-4 h-4 text-blue-600" />
-                    Dallas Dispatch Clustered Route Optimization
-                  </h2>
-                  <Badge className="bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px] font-bold">
-                    32% Drive-Time Saved
-                  </Badge>
-                </div>
-                <p className="text-xs text-slate-500">
-                  Visual territory routing grouped by technician zone to minimize windshield drive time.
+          /* ================= DISPATCH ROUTE MAP — NOT BUILT ================= */
+          /*
+           * This tab previously rendered a complete fabrication presented as live
+           * data: a "32% Drive-Time Saved" badge, "38.4 Miles", "1 hr 14 mins",
+           * "+$64 / Day Saved", invented per-leg drive times, three hardcoded
+           * Dallas map pins with a literal coordinate readout, three invented
+           * customers shown whenever there was no real data, and a "Dispatch Route
+           * to Techs" button that fired a toast claiming a route had been sent
+           * while calling no API at all.
+           *
+           * None of it was real. There is no geocoding in the backend, no
+           * coordinates on a technician or a job, and no routing algorithm — the
+           * only real dispatch output is an SMS containing a Google Maps link to
+           * the job's text address.
+           *
+           * Showing invented operational numbers is worse than showing nothing: a
+           * dispatcher plans a day around them.
+           */
+          <div className="bg-white border border-slate-200/90 rounded-2xl p-6 sm:p-8 shadow-xs">
+            <div className="mx-auto max-w-xl space-y-5 text-center">
+              <div
+                className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl border border-amber-200 bg-amber-50 text-amber-600"
+                aria-hidden="true"
+              >
+                <Construction className="h-6 w-6" />
+              </div>
+
+              <div className="space-y-1.5">
+                <span className="inline-block rounded-full border border-slate-200 bg-slate-50 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                  Not available yet
+                </span>
+                <h2 className="text-lg font-bold text-slate-900">
+                  Route optimisation is not built
+                </h2>
+                <p className="mx-auto max-w-md text-sm text-slate-600 leading-relaxed">
+                  Real routing needs job addresses converted to coordinates and a home
+                  base for each technician. Neither exists yet, so any map, mileage or
+                  time saving shown here would be invented.
                 </p>
               </div>
 
-              <div className="flex items-center gap-2 shrink-0">
-                <Button
-                  type="button"
-                  onClick={() => {
-                    toast.success('Route Dispatched via SMS', 'Full turn-by-turn route sent to technician mobile phones.');
-                  }}
-                  className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold h-9 px-3.5 rounded-xl shadow-xs flex items-center gap-1.5"
-                >
-                  <Send className="w-3.5 h-3.5" />
-                  Dispatch Route to Techs
-                </Button>
-              </div>
-            </div>
+              <ul className="mx-auto max-w-sm space-y-1.5 rounded-xl border border-slate-200 bg-slate-50 p-4 text-left">
+                {[
+                  'Geocoded job sites and technician home bases',
+                  'Ordered stops per technician per day, with real distance and drive time',
+                  'A live map with job pins, technician positions and zone overlays',
+                  'Send the ordered route to each technician',
+                ].map((item) => (
+                  <li key={item} className="flex items-start gap-2 text-xs text-slate-600">
+                    <span
+                      className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-slate-400"
+                      aria-hidden="true"
+                    />
+                    <span>{item}</span>
+                  </li>
+                ))}
+              </ul>
 
-            {/* Visual Simulated Map Territory Grid */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-              {/* Interactive Route Stop Sequence */}
-              <div className="lg:col-span-1 space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
-                    Active Tech Routes ({appointments.length > 0 ? appointments.length : 3} Stops)
-                  </span>
-                  <span className="text-xs text-slate-400 font-mono">Dallas Metro</span>
-                </div>
-
-                <div className="space-y-2.5 max-h-[480px] overflow-y-auto pr-1">
-                  {(appointments.length > 0 ? appointments : [
-                    { id: '1', startAt: '2026-09-20T09:00:00Z', customerId: { firstName: 'Robert', lastName: 'Davis', phone: '(214) 555-0142' }, serviceId: { name: 'AC Capacitor Replacement' }, priority: 'urgent' },
-                    { id: '2', startAt: '2026-09-20T11:30:00Z', customerId: { firstName: 'Sarah', lastName: 'Miller', phone: '(972) 555-0189' }, serviceId: { name: 'Full System Tune-up' }, priority: 'medium' },
-                    { id: '3', startAt: '2026-09-20T14:00:00Z', customerId: { firstName: 'Marcus', lastName: 'Vance', phone: '(469) 555-0111' }, serviceId: { name: 'R-410A Leak Detection' }, priority: 'high' },
-                  ]).map((apt: any, idx) => (
-                    <div
-                      key={apt.id || idx}
-                      className="p-3.5 rounded-xl border border-slate-200 hover:border-blue-300 bg-slate-50/60 hover:bg-white transition-all space-y-1.5 relative group"
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <span className="w-5 h-5 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-[10px]">
-                            {idx + 1}
-                          </span>
-                          <span className="text-xs font-bold text-slate-900">
-                            {apt.customerId?.firstName} {apt.customerId?.lastName}
-                          </span>
-                        </div>
-                        <span className="text-[10px] font-mono font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-100">
-                          {formatTime(apt.startAt)}
-                        </span>
-                      </div>
-                      <p className="text-xs text-slate-600 pl-7">
-                        {apt.serviceId?.name || 'HVAC Service Call'}
-                      </p>
-                      <div className="flex items-center justify-between text-[11px] text-slate-400 pl-7 pt-1 border-t border-slate-100">
-                        <span>{idx === 0 ? 'Depot ➔ Stop 1 (12 mins)' : `Stop ${idx} ➔ Stop ${idx + 1} (14 mins)`}</span>
-                        <span className="text-emerald-600 font-medium">Optimal Order</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Graphical Map Representation of Dallas Metro Pins */}
-              <div className="lg:col-span-2 bg-gradient-to-br from-slate-900 via-slate-800 to-indigo-950 rounded-2xl p-6 text-white relative overflow-hidden min-h-[420px] flex flex-col justify-between border border-slate-800 shadow-inner">
-                {/* Visual Grid Lines */}
-                <div className="absolute inset-0 opacity-10 bg-[radial-gradient(#38bdf8_1px,transparent_1px)] [background-size:24px_24px]" />
-
-                <div className="relative z-10 flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
-                    <span className="text-xs font-bold uppercase tracking-wider text-emerald-300">
-                      Live Fleet Telemetry Active
-                    </span>
-                  </div>
-                  <span className="text-xs text-slate-400 font-mono">Coordinates: 32.7767° N, 96.7970° W</span>
-                </div>
-
-                {/* Map Pins Simulation Canvas */}
-                <div className="relative z-10 my-8 grid grid-cols-3 gap-6 text-center">
-                  <div className="p-4 rounded-xl bg-white/10 backdrop-blur-md border border-white/15 space-y-1 transform hover:scale-105 transition-transform">
-                    <div className="w-8 h-8 rounded-full bg-blue-500 text-white flex items-center justify-center font-bold text-xs mx-auto shadow-lg shadow-blue-500/50">
-                      1
-                    </div>
-                    <span className="text-xs font-bold text-white block">North Dallas</span>
-                    <span className="text-[10px] text-slate-300 block">Preston Rd &bull; 9:00 AM</span>
-                  </div>
-
-                  <div className="p-4 rounded-xl bg-white/10 backdrop-blur-md border border-white/15 space-y-1 transform hover:scale-105 transition-transform">
-                    <div className="w-8 h-8 rounded-full bg-indigo-500 text-white flex items-center justify-center font-bold text-xs mx-auto shadow-lg shadow-indigo-500/50">
-                      2
-                    </div>
-                    <span className="text-xs font-bold text-white block">Addison / Richardson</span>
-                    <span className="text-[10px] text-slate-300 block">Belt Line Rd &bull; 11:30 AM</span>
-                  </div>
-
-                  <div className="p-4 rounded-xl bg-white/10 backdrop-blur-md border border-white/15 space-y-1 transform hover:scale-105 transition-transform">
-                    <div className="w-8 h-8 rounded-full bg-emerald-500 text-white flex items-center justify-center font-bold text-xs mx-auto shadow-lg shadow-emerald-500/50">
-                      3
-                    </div>
-                    <span className="text-xs font-bold text-white block">Plano Central</span>
-                    <span className="text-[10px] text-slate-300 block">Coit Rd &bull; 2:00 PM</span>
-                  </div>
-                </div>
-
-                {/* Bottom Route Metrics Strip */}
-                <div className="relative z-10 p-3 rounded-xl bg-slate-900/80 backdrop-blur-md border border-slate-700/80 flex flex-wrap items-center justify-between gap-3 text-xs">
-                  <div className="flex items-center gap-4">
-                    <div>
-                      <span className="text-[10px] text-slate-400 uppercase tracking-wider block">Total Route Distance</span>
-                      <span className="font-bold text-white">38.4 Miles</span>
-                    </div>
-                    <div className="border-l border-slate-700 pl-4">
-                      <span className="text-[10px] text-slate-400 uppercase tracking-wider block">Estimated Travel Time</span>
-                      <span className="font-bold text-white">1 hr 14 mins</span>
-                    </div>
-                    <div className="border-l border-slate-700 pl-4">
-                      <span className="text-[10px] text-slate-400 uppercase tracking-wider block">Fuel Economy</span>
-                      <span className="font-bold text-emerald-400">+$64 / Day Saved</span>
-                    </div>
-                  </div>
-
-                  <a
-                    href="https://maps.google.com"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center gap-1.5 text-xs font-semibold text-blue-400 hover:text-blue-300 transition-colors"
+              {/* What genuinely works today, so the tab is not a dead end. */}
+              <div className="rounded-xl border border-blue-100 bg-blue-50/60 p-4 text-left">
+                <p className="text-xs font-bold text-blue-900 mb-1.5">
+                  What you can use today
+                </p>
+                <p className="text-xs text-blue-800/90 leading-relaxed">
+                  Assign a technician when you book a job, and match callers to the
+                  right technician by ZIP code using{' '}
+                  <Link
+                    href="/app/settings"
+                    className="font-semibold text-blue-700 underline hover:text-blue-900"
                   >
-                    Open in Google Maps Navigation
-                    <ArrowRight className="w-3.5 h-3.5" />
-                  </a>
-                </div>
+                    service zones
+                  </Link>
+                  . Dispatching a job texts the technician the customer&apos;s address
+                  with a Google Maps link.
+                </p>
               </div>
+
+              <button
+                type="button"
+                onClick={() => setViewMode('list')}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+              >
+                <List className="h-4 w-4" aria-hidden="true" />
+                Back to the job list
+              </button>
             </div>
           </div>
         )}

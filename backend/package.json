@@ -12,6 +12,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "sync-indexes": "tsx src/scripts/sync-indexes.ts",
+    "backfill:technician-ids": "tsx src/scripts/backfill-technician-ids.ts",
     "sync-indexes:prod": "node dist/src/scripts/sync-indexes.js"
   },
   "keywords": [

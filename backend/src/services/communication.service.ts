@@ -102,7 +102,7 @@ export class CommunicationService {
      */
     if (input.customerId) {
       const customer = await Customer.findOne({ _id: input.customerId, businessId });
-      if (customer && (customer as any).isOptedOut) {
+      if (customer && customer.isOptedOut) {
         throw new AppError(
           'This customer has opted out of text messages and cannot be contacted by SMS.',
           409
@@ -237,20 +237,47 @@ export class CommunicationService {
 
     const customer = await Customer.findOne({ businessId, phone: From });
 
-    // Handle TCPA opt-out keywords
+    /**
+     * Carrier-standard TCPA keywords, and only those.
+     *
+     * `YES` used to be an opt-in keyword. It is not a carrier standard, and it is
+     * the single most likely thing a customer types in reply to any message — so a
+     * customer answering "YES" to an appointment reminder had their reply consumed
+     * as a marketing opt-in. Worse, the opt-in branch did not return, so execution
+     * continued into the lead-recovery handler, whose intent regex matches "yes"
+     * and which would book them a SECOND appointment for the next morning and text
+     * a confirmation for it.
+     *
+     * `CANCEL` stays in the opt-out list even though a customer may well mean
+     * "cancel my appointment": it is a carrier-mandated opt-out keyword and
+     * treating it as anything else risks a TCPA violation. Appointment
+     * cancellation by reply needs its own distinct keyword.
+     */
     const optOutKeywords = ['STOP', 'STOPALL', 'UNSUBSCRIBE', 'CANCEL', 'END', 'QUIT'];
-    const optInKeywords = ['START', 'UNSTOP', 'YES'];
+    const optInKeywords = ['START', 'UNSTOP'];
 
-    if (optOutKeywords.includes(upper)) {
-      if (customer) {
-        (customer as any).isOptedOut = true;
-        customer.notes = `${customer.notes || ''} [SMS Opt-Out requested via text]`.trim();
-        await customer.save();
-      }
-    } else if (optInKeywords.includes(upper)) {
-      if (customer) {
-        (customer as any).isOptedOut = false;
-        customer.notes = `${customer.notes || ''} [SMS Opt-In confirmed via text]`.trim();
+    const isOptOut = optOutKeywords.includes(upper);
+    const isOptIn = optInKeywords.includes(upper);
+
+    if (customer && (isOptOut || isOptIn)) {
+      const wasOptedOut = Boolean(customer.isOptedOut);
+      const nowOptedOut = isOptOut;
+
+      /**
+       * Only written when the state actually changes.
+       *
+       * This appended to `notes` on every matching message. `notes` has a 2000
+       * character cap, so a customer texting STOP a few dozen times would
+       * eventually make `customer.save()` fail validation and take the whole
+       * inbound webhook down with it.
+       */
+      if (wasOptedOut !== nowOptedOut) {
+        customer.isOptedOut = nowOptedOut;
+        customer.optedOutAt = nowOptedOut ? new Date() : null;
+        const note = nowOptedOut
+          ? '[SMS Opt-Out requested via text]'
+          : '[SMS Opt-In confirmed via text]';
+        customer.notes = `${customer.notes || ''} ${note}`.trim().slice(0, 2000);
         await customer.save();
       }
     }
@@ -268,9 +295,22 @@ export class CommunicationService {
       twilioSid: MessageSid,
     });
 
-    if (optOutKeywords.includes(upper)) {
+    if (isOptOut) {
       return {
         reply: 'You have been unsubscribed from notifications and will receive no further messages. Reply START to resubscribe.',
+      };
+    }
+
+    /**
+     * Returns rather than falling through.
+     *
+     * A consent keyword is a complete instruction on its own. Letting it continue
+     * into the CSAT and lead-recovery handlers is what turned a one-word reply
+     * into a booking.
+     */
+    if (isOptIn) {
+      return {
+        reply: 'You are subscribed again and will receive appointment updates. Reply STOP at any time to unsubscribe.',
       };
     }
 

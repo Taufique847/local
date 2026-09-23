@@ -2,7 +2,11 @@ import { Router } from 'express';
 import { AppointmentController } from '../controllers/appointment.controller';
 import { authMiddleware } from '../middleware/auth.middleware';
 import { validateBody } from '../middleware/validate';
-import { createAppointmentSchema, appointmentStatusSchema } from '../validation/schemas';
+import {
+  createAppointmentSchema,
+  updateAppointmentSchema,
+  appointmentStatusSchema,
+} from '../validation/schemas';
 
 const router = Router();
 
@@ -20,7 +24,13 @@ router.post(
 );
 router.post('/:id/reschedule', AppointmentController.rescheduleAppointment as any);
 router.post('/:id/cancel', AppointmentController.cancelAppointment as any);
-router.put('/:id', AppointmentController.updateAppointment as any);
+// Previously unvalidated: it accepted any body. `technicianId` in particular must
+// be a well-formed id before it reaches a tenant-scoped lookup.
+router.put(
+  '/:id',
+  validateBody(updateAppointmentSchema),
+  AppointmentController.updateAppointment as any
+);
 router.patch(
   '/:id/status',
   validateBody(appointmentStatusSchema),

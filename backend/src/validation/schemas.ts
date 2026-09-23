@@ -206,6 +206,10 @@ export const policySchema = z.object({
   emergencyKeywords: z.array(trimmed(60).min(2)).max(100),
   diagnosticFee: z.coerce.number().min(0).max(10_000),
   emergencyFee: z.coerce.number().min(0).max(10_000),
+  // A fraction (0.0825 = 8.25%), matching the model. Optional so an existing
+  // settings form that does not yet post it keeps working.
+  taxRate: z.coerce.number().min(0).max(1).optional(),
+  laborRate: z.coerce.number().min(0).max(10_000).optional(),
   requireDiagnosticBeforePricing: z.boolean().optional(),
   afterHoursDispatchEnabled: z.boolean().optional(),
   emergencyTransferPhone: usPhone.optional().or(z.literal('')),
@@ -302,6 +306,7 @@ export const createCustomerSchema = z.object({
   tags: z.array(trimmed(40)).max(20).optional(),
   status: z.enum(['active', 'inactive']).optional(),
   source: trimmed(60).optional(),
+  propertyType: z.enum(['residential', 'commercial']).optional(),
 });
 
 /** Every field optional, but at least one must be present. */
@@ -345,10 +350,48 @@ export const createAppointmentSchema = z.object({
   address: trimmed(300).optional(),
   priority: z.enum(['low', 'medium', 'high', 'urgent']).optional(),
   source: z.enum(['manual', 'ai_call', 'website', 'referral', 'other']).optional(),
+  // The real assignment. `technicianName` is derived from this when present.
+  technicianId: objectId.optional(),
   technicianName: trimmed(120).optional(),
   customerNotes: trimmed(2000).optional(),
   internalNotes: trimmed(2000).optional(),
 });
+
+/**
+ * PUT /api/appointments/:id
+ *
+ * This route had no schema at all, so it accepted any body and relied on the
+ * service to ignore unknown keys. `technicianId` in particular has to be
+ * validated as an id before it reaches a tenant-scoped lookup.
+ *
+ * `technicianId: null` is accepted and means "unassign".
+ */
+export const updateAppointmentSchema = z
+  .object({
+    description: trimmed(2000).optional(),
+    address: trimmed(300).optional(),
+    priority: z.enum(['low', 'medium', 'high', 'urgent']).optional(),
+    status: z
+      .enum([
+        'scheduled',
+        'confirmed',
+        'rescheduled',
+        'en_route',
+        'arrived',
+        'in_progress',
+        'completed',
+        'cancelled',
+        'no_show',
+      ])
+      .optional(),
+    technicianId: z.union([objectId, z.null()]).optional(),
+    technicianName: trimmed(120).optional(),
+    customerNotes: trimmed(2000).optional(),
+    internalNotes: trimmed(2000).optional(),
+  })
+  .refine((data) => Object.keys(data).length > 0, {
+    message: 'Provide at least one field to update',
+  });
 
 export const appointmentStatusSchema = z.object({
   status: z.enum([

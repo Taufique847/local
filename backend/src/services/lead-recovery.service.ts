@@ -334,9 +334,62 @@ export class LeadRecoveryService {
     // Check if customer wants to book (keywords: yes, tomorrow, morning, afternoon, book, schedule, monday, friday, etc.)
     const wantsBooking = /(?:yes|sure|book|schedule|morning|afternoon|tomorrow|today|need someone|slot|available|pm|am)/i.test(lower);
 
+    /**
+     * Never book a second appointment for a customer who already has one coming.
+     *
+     * The intent regex above matches bare "yes", which is the single most likely
+     * reply to ANY message the business sends — including an appointment
+     * reminder. A customer confirming an existing appointment was therefore given
+     * a brand-new one for the next morning, plus a confirmation text for it.
+     *
+     * Keyword lists cannot separate "yes, book me" from "yes, I'll be there", so
+     * the guard is the invariant rather than the vocabulary. `triggerRecoveryForCall`
+     * already applies this same check before starting a campaign; this makes the
+     * reply path consistent with it.
+     */
+    if (wantsBooking && customer) {
+      const upcoming = await Appointment.findOne({
+        businessId: recoveryBusinessId,
+        customerId: customer._id,
+        status: { $in: ['scheduled', 'confirmed', 'rescheduled'] },
+        startAt: { $gte: new Date() },
+      }).sort({ startAt: 1 });
+
+      if (upcoming) {
+        activeRecovery.status = 'recovered_responded';
+        await activeRecovery.save();
+
+        logger.info('lead_recovery_reply_existing_appointment', {
+          recoveryId: activeRecovery._id.toString(),
+          appointmentId: upcoming._id.toString(),
+        });
+
+        const when = new Date(upcoming.startAt).toLocaleString('en-US', {
+          weekday: 'long',
+          month: 'short',
+          day: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit',
+        });
+
+        return {
+          handled: true,
+          replyMessage: `Thanks! You are already booked with ${businessName} for ${when}. Reply CANCEL if you need to change it, or call us and we will sort it out.`,
+        };
+      }
+    }
+
     if (wantsBooking) {
-      // Find a default service (e.g. Diagnostic / AC Repair)
-      let service = await Service.findOne({ businessId, active: true });
+      /**
+       * `status`, not `active`.
+       *
+       * Service has no `active` field — it carries `status: 'active' | 'inactive'`.
+       * Mongoose passes an unknown filter key straight through to MongoDB, so this
+       * query matched nothing on every call and the branch below created a fresh
+       * "HVAC Diagnostic & Service Inspection" record every single time an SMS
+       * recovery booked. The service list grew by one per booking.
+       */
+      let service = await Service.findOne({ businessId, status: 'active' });
       if (!service) {
         service = await Service.create({
           businessId,
@@ -344,7 +397,7 @@ export class LeadRecoveryService {
           startingPrice: 89,
           durationMinutes: 60,
           category: 'Cooling',
-          active: true,
+          status: 'active',
         });
       }
 

@@ -97,6 +97,22 @@ export interface CreateAppointmentInput {
   endAt?: string;
   description?: string;
   address?: string;
+  /**
+   * The technician this job is assigned to.
+   *
+   * This is the real assignment. Nothing used to write `Appointment.technicianId`
+   * at all — only the free-text `technicianName` below — so every appointment
+   * carried `technicianId: null` and the field app's per-technician job scoping
+   * silently matched everything.
+   */
+  technicianId?: string | null;
+  /**
+   * Display name, derived from `technicianId` when one is given.
+   *
+   * Kept because existing records and the dispatch SMS lookup use it, but it is
+   * no longer the source of truth. Supplying it alone still works for a business
+   * that has not created technician records yet.
+   */
   technicianName?: string;
   priority?: AppointmentPriority;
   source?: AppointmentSource;
@@ -110,6 +126,8 @@ export interface UpdateAppointmentInput {
   endAt?: string;
   description?: string;
   address?: string;
+  /** Pass `null` to unassign. */
+  technicianId?: string | null;
   technicianName?: string;
   priority?: AppointmentPriority;
   status?: AppointmentStatus;
@@ -133,5 +151,7 @@ export interface AppointmentQueryFilter {
   from?: string;    // YYYY-MM-DD range start
   to?: string;      // YYYY-MM-DD range end
   customerId?: string;
+  /** Filter the board to one technician. Preferred over `technicianName`. */
+  technicianId?: string;
   technicianName?: string;
 }

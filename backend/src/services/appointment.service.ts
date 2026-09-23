@@ -4,6 +4,7 @@ import { Customer } from '../models/customer.model';
 import { Service } from '../models/service.model';
 import { Lead } from '../models/lead.model';
 import { Business } from '../models/business.model';
+import { Technician } from '../models/technician.model';
 import { AvailabilityService } from './availability.service';
 import { LockService, LockAcquisitionError } from './lock.service';
 import {
@@ -28,6 +29,51 @@ export class AppointmentService {
 
   /** Long enough to cover the conflict check plus the insert, short enough that a crash frees it quickly. */
   private static readonly BOOKING_LOCK_TTL_MS = 10_000;
+
+  /**
+   * Resolves an assignment to a technician record in THIS business.
+   *
+   * Returns the pair actually written to the appointment. Both fields are kept in
+   * step deliberately: `technicianId` is the real reference the field app scopes
+   * on, and `technicianName` is the denormalised copy the dispatch SMS lookup and
+   * the existing list filter still read.
+   *
+   * Scoped by businessId, so an id belonging to another company's roster is a
+   * 404 rather than a silent cross-tenant assignment.
+   */
+  private static async resolveTechnician(
+    businessId: Types.ObjectId | string,
+    technicianId: string | null | undefined,
+    fallbackName?: string
+  ): Promise<{ technicianId: Types.ObjectId | null; technicianName?: string } | null> {
+    // `undefined` means "not supplied" — leave whatever is already there.
+    if (technicianId === undefined) {
+      return fallbackName === undefined
+        ? null
+        : { technicianId: null, technicianName: fallbackName };
+    }
+
+    // Explicit null means unassign.
+    if (technicianId === null || technicianId === '') {
+      return { technicianId: null, technicianName: fallbackName ?? undefined };
+    }
+
+    if (!Types.ObjectId.isValid(technicianId)) {
+      throw new AppError('Technician not found', 404);
+    }
+
+    const technician = await Technician.findOne({
+      _id: technicianId,
+      businessId,
+      active: true,
+    });
+
+    if (!technician) {
+      throw new AppError('Technician not found', 404);
+    }
+
+    return { technicianId: technician._id, technicianName: technician.name };
+  }
 
   /**
    * Create a new appointment with double-booking check and lead synchronization.
@@ -107,6 +153,14 @@ export class AppointmentService {
     const timezone = business.timezone || 'America/New_York';
     const address = input.address || customer.address;
 
+    // Writes technicianId, which nothing did before. Without it every job stayed
+    // unassigned and the field app could not scope to one person's work.
+    const assignment = await AppointmentService.resolveTechnician(
+      businessId,
+      input.technicianId,
+      input.technicianName
+    );
+
     const appointment = await Appointment.create({
       businessId,
       customerId: input.customerId,
@@ -121,7 +175,8 @@ export class AppointmentService {
       priority: input.priority || 'medium',
       source: input.source || 'manual',
       address,
-      technicianName: input.technicianName,
+      technicianId: assignment?.technicianId ?? null,
+      technicianName: assignment?.technicianName ?? input.technicianName,
       customerNotes: input.customerNotes,
       internalNotes: input.internalNotes,
       createdBy,
@@ -338,7 +393,11 @@ export class AppointmentService {
       query.customerId = filter.customerId;
     }
 
-    if (filter.technicianName) {
+    // Preferred: filter on the real reference. Falls back to the name for
+    // records created before technicianId was written.
+    if (filter.technicianId && Types.ObjectId.isValid(filter.technicianId)) {
+      query.technicianId = filter.technicianId;
+    } else if (filter.technicianName) {
       query.technicianName = new RegExp(filter.technicianName, 'i');
     }
 
@@ -439,9 +498,29 @@ export class AppointmentService {
     if (input.priority !== undefined) appointment.priority = input.priority;
     if (input.status !== undefined) appointment.status = input.status;
     if (input.address !== undefined) appointment.address = input.address;
-    if (input.technicianName !== undefined) appointment.technicianName = input.technicianName;
     if (input.customerNotes !== undefined) appointment.customerNotes = input.customerNotes;
     if (input.internalNotes !== undefined) appointment.internalNotes = input.internalNotes;
+
+    /**
+     * Reassignment.
+     *
+     * Handled after the simple field copies because it can throw, and because
+     * `technicianId` has to win over any `technicianName` sent alongside it — the
+     * two disagreeing is how the denormalised copy drifts out of step with the
+     * reference the field app actually scopes on.
+     */
+    if (input.technicianId !== undefined) {
+      const assignment = await AppointmentService.resolveTechnician(
+        businessId,
+        input.technicianId,
+        input.technicianName
+      );
+      appointment.technicianId = (assignment?.technicianId ?? undefined) as any;
+      appointment.technicianName = assignment?.technicianName;
+    } else if (input.technicianName !== undefined) {
+      // Name-only update, for a business with no technician records yet.
+      appointment.technicianName = input.technicianName;
+    }
 
     await appointment.save();
     return this.getAppointmentById(businessId, id);

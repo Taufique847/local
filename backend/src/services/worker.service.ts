@@ -4,6 +4,7 @@ import { Technician } from '../models/technician.model';
 import { Invoice } from '../models/invoice.model';
 import { Service } from '../models/service.model';
 import { DocumentNumberService } from './document-number.service';
+import { PolicyGuardrailsService } from './policy-guardrails.service';
 import { generateShareToken } from '../utils/share-token';
 import { AppError } from '../types';
 
@@ -213,23 +214,54 @@ export class WorkerService {
     };
     await apt.save();
 
+    /**
+     * Rates come from the business's own policy, not from literals in this file.
+     *
+     * Every number below used to be hardcoded here — $189 base, $95 labour, $89
+     * diagnostic credit and an 8.25% tax rate the caller could not override. A
+     * business with different pricing was billed the wrong amount on every job
+     * completed from the field app, with no way to correct it.
+     */
+    const policy = await PolicyGuardrailsService.getPolicy(apt.businessId);
+
     // Prepare line items
     const items: Array<{ description: string; quantity: number; unitPrice: number; total: number }> = [];
 
     const svc = apt.serviceId as any;
-    if (svc) {
+
+    /**
+     * `startingPrice` is the field that exists.
+     *
+     * This read `svc.price`, which is not on the Service schema at all, so it was
+     * always `undefined` and every invoice fell through to the $189 literal —
+     * including for a $450 service. The bug was invisible because the fallback
+     * produced a plausible-looking number.
+     */
+    const servicePrice =
+      typeof svc?.startingPrice === 'number' ? svc.startingPrice : null;
+
+    if (svc && servicePrice !== null) {
       items.push({
         description: svc.name || 'HVAC Standard Diagnostics & Service',
         quantity: 1,
-        unitPrice: svc.price || 189,
-        total: svc.price || 189,
+        unitPrice: servicePrice,
+        total: servicePrice,
+      });
+    } else if (svc) {
+      // The service exists but carries no price. Bill the diagnostic fee, which is
+      // the one figure the business has authorised, rather than inventing one.
+      items.push({
+        description: svc.name || 'HVAC Standard Diagnostics & Service',
+        quantity: 1,
+        unitPrice: policy.diagnosticFee,
+        total: policy.diagnosticFee,
       });
     } else {
       items.push({
         description: 'Standard HVAC Diagnostic & System Repair',
         quantity: 1,
-        unitPrice: 189,
-        total: 189,
+        unitPrice: policy.diagnosticFee,
+        total: policy.diagnosticFee,
       });
     }
 
@@ -247,7 +279,7 @@ export class WorkerService {
 
     // Add extra labor if any
     if (data.additionalLaborHours && data.additionalLaborHours > 0) {
-      const rate = data.laborRate || 95;
+      const rate = data.laborRate ?? policy.laborRate;
       items.push({
         description: `Field Technician Labor (${data.additionalLaborHours} hrs)`,
         quantity: data.additionalLaborHours,
@@ -258,9 +290,9 @@ export class WorkerService {
 
     // Calculate totals
     const subtotal = items.reduce((sum, item) => sum + item.total, 0);
-    const diagCredit = data.diagnosticFeeCredit ?? 89; // Default $89 diagnostic fee credit
+    const diagCredit = data.diagnosticFeeCredit ?? policy.diagnosticFee;
     const taxableSubtotal = Math.max(0, subtotal - diagCredit);
-    const taxRate = 0.0825;
+    const taxRate = policy.taxRate;
     const taxAmount = parseFloat((taxableSubtotal * taxRate).toFixed(2));
     const totalAmount = parseFloat((taxableSubtotal + taxAmount).toFixed(2));
 

@@ -2,6 +2,7 @@ import { Types } from 'mongoose';
 import { Invoice, IInvoice, IInvoiceItem, PaymentMethod } from '../models/invoice.model';
 import { Customer } from '../models/customer.model';
 import { DocumentNumberService } from './document-number.service';
+import { PolicyGuardrailsService } from './policy-guardrails.service';
 import { AppError } from '../types';
 import { generateShareToken, isValidShareTokenFormat } from '../utils/share-token';
 
@@ -32,7 +33,10 @@ export class InvoiceService {
     const subtotal = data.items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
     const diagCredit = data.diagnosticFeeCredit ?? 0;
     const taxableSubtotal = Math.max(0, subtotal - diagCredit);
-    const taxRate = data.taxRate ?? 0.0825;
+    // Falls back to the business's own rate rather than an 8.25% literal, which
+    // was correct for exactly one tax jurisdiction.
+    const policy = await PolicyGuardrailsService.getPolicy(businessId);
+    const taxRate = data.taxRate ?? policy.taxRate;
     const taxAmount = parseFloat((taxableSubtotal * taxRate).toFixed(2));
     const totalAmount = parseFloat((taxableSubtotal + taxAmount).toFixed(2));
 

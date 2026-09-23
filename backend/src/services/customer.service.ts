@@ -20,6 +20,9 @@ export class CustomerService {
       email: customer.email,
       address: customer.address,
       notes: customer.notes,
+      isOptedOut: Boolean(customer.isOptedOut),
+      optedOutAt: customer.optedOutAt,
+      propertyType: customer.propertyType,
       status: customer.status,
       source: customer.source,
       createdAt: customer.createdAt,
@@ -49,6 +52,7 @@ export class CustomerService {
       notes: input.notes?.trim(),
       status: input.status || 'active',
       source: input.source || 'manual',
+      propertyType: input.propertyType,
     });
 
     return this.toDTO(customer);
@@ -68,6 +72,19 @@ export class CustomerService {
     // Status filter
     if (queryInput.status && ['active', 'inactive'].includes(queryInput.status)) {
       filter.status = queryInput.status;
+    }
+
+    /**
+     * Property-type filter.
+     *
+     * The customers page has always sent this parameter. Nothing here read it, so
+     * it was silently discarded and the dropdown appeared to do nothing.
+     */
+    if (
+      queryInput.propertyType &&
+      ['residential', 'commercial'].includes(queryInput.propertyType)
+    ) {
+      filter.propertyType = queryInput.propertyType;
     }
 
     // Search query (matches first name, last name, phone, or email)
@@ -126,6 +143,7 @@ export class CustomerService {
     if (input.address !== undefined) customer.address = { ...customer.address, ...input.address };
     if (input.notes !== undefined) customer.notes = input.notes.trim();
     if (input.status !== undefined) customer.status = input.status;
+    if (input.propertyType !== undefined) customer.propertyType = input.propertyType;
 
     await customer.save();
     return this.toDTO(customer);

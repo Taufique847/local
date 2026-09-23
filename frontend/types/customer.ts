@@ -20,6 +20,9 @@ export interface Customer {
   notes?: string;
   status: CustomerStatus;
   propertyType?: 'residential' | 'commercial';
+  /** True once the customer has texted STOP. They cannot be sent SMS. */
+  isOptedOut?: boolean;
+  optedOutAt?: string | null;
   source?: string;
   createdAt: string;
   updatedAt: string;
