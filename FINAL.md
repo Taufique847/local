@@ -11,10 +11,10 @@
 
 | Measure | Value |
 |---|---|
-| Features **fully built and verified** | **37 of 86** (~43%) |
-| Features **partially built** (usable but incomplete) | **4 of 86** (~5%) |
+| Features **fully built and verified** | **36 of 86** (~42%) |
+| Features **partially built** (usable but incomplete) | **5 of 86** (~6%) |
 | Features **not started** | **45 of 86** (~52%) |
-| Weighted completion against the full vision | **~45%** (built = 1, partial = 0.5 → 37 + 2 = 39 of 86) |
+| Weighted completion against the full vision | **~45%** (built = 1, partial = 0.5 → 36 + 2.5 = 38.5 of 86) |
 | Completion against a **launchable MVP** (§7 of the vision doc) | **~90%** |
 
 Two different questions, two different answers:
@@ -22,7 +22,7 @@ Two different questions, two different answers:
 - **"Is the 86-feature enterprise platform done?"** No — a bit over a third.
 - **"Is there a product a contractor could pay for?"** Nearly. What blocks it now is one thing: the voice pipeline has never handled a real call.
 
-> **Counting note.** An earlier revision of this file claimed 26 built / 13 partial. That headline never matched its own tables — counting the numbered rows below gives 37 and 4. The tables were right; the summary was wrong. Numbers here are now derived from the tables by counting ✅ and 🟡 rows, and the weighting formula is stated inline rather than left implicit — the previous "~38%" had no stated derivation, so it could not be checked.
+> **Counting note.** An earlier revision of this file claimed 26 built / 13 partial. That headline never matched its own tables — counting the numbered rows below gives 36 and 5. The tables were right; the summary was wrong. Numbers here are now derived from the tables by counting ✅ and 🟡 rows, and the weighting formula is stated inline rather than left implicit — the previous "~38%" had no stated derivation, so it could not be checked.
 
 The estimate in `PROJECT_STATUS_AND_ROADMAP.md` was 18–20%. The rise is mostly hardening and correctness rather than new surface area: the voice pipeline became real, the security holes closed, a large amount of fabricated data was removed, and the product gained the two things that stop it being single-user — staff accounts and a password recovery path.
 
@@ -50,7 +50,7 @@ Each row was confirmed in code, and where marked ✓runtime, exercised against a
 | 9 | Customer CRM profile | ✅ Built | Customer 360 view aggregating appointments, invoices, calls, memories. |
 | 10 | Property notes | ✅ Built | Structured `Customer.property` (gate code, access instructions, pets, parking) and a real `Equipment` model (type, brand, model, serial, install year, filter size, location, warranty). `hasPets` is tri-state — "not asked" is not "no pets". Transcript extraction writes the structured field *and* keeps the memory row for provenance, and never overwrites what a person entered. The voice prompt and the dispatch text both read the fields. Still no per-field access control: the gate code is plain text and visible to any staff login, which is flagged in the model. |
 | 12 | Lost-lead follow-up | ✅ Built | Drip campaign with backoff, attempt cap and honest failure recording. |
-| 13 | Customer segmentation | ✅ Built | Tags now reach the list API at all — they were indexed, editable and omitted from the DTO, so the page's tag filters had nothing to filter on. Saved `CustomerSegment` records with live (never cached) counts, filters on tags in/all/none, lifetime value, last service date, never-serviced, property type and equipment brand, and campaigns that send through `NotificationService` per recipient so quiet hours and the SMS opt-out apply. Campaign texts are refused without an opt-out notice; capped at 500 recipients. Also closed two fields nothing wrote: `lifetimeValue` (permanently 0) and `lastServiceAt` (absent), without which two of these filters could never match. |
+| 13 | Customer segmentation | 🟡 Partial | Tags now reach the list API at all — they were indexed, editable and omitted from the DTO, so the page's tag filters had nothing to filter on. Saved `CustomerSegment` records with live (never cached) counts, filters on tags in/all/none, lifetime value, last service date, never-serviced, property type and equipment brand, and campaigns that send through `NotificationService` per recipient so quiet hours and the SMS opt-out apply. Campaign texts are refused without an opt-out notice; capped at 500 recipients. Also closed two fields nothing wrote: `lifetimeValue` (permanently 0) and `lastServiceAt` (absent), without which two of these filters could never match. **Marked partial for one reason: there is no email-consent flag.** An email campaign can be sent and a customer has no way to unsubscribe from marketing email. Transactional email is exempt from that requirement; a campaign is not. |
 
 ### C. Calendar, booking and dispatch
 
@@ -251,7 +251,7 @@ Worth knowing before a demo, because each one reads as finished in the UI.
 | Job-completion pricing | Automated — a $450 service bills 450, per-business tax and labour rates, diagnostic credit against the taxable base |
 | Technician assignment | Automated through the real booking path — cross-tenant and inactive technicians refused, name derived from the record |
 | SMS consent | Automated — STOP persists and blocks sending, START restores, no duplicate booking from a consent reply |
-| **Automated tests** | ✅ 377 tests, 18 files, in CI. Mutation-checked: 143 deliberate regressions attempted, 140 caught. The three survivors were each verified behaviour-neutral and documented in place — two redundant tenant clauses whose load-bearing twins *were* caught, and one guard that turned out to be unreachable and was deleted rather than left implying a check that could never fire |
+| **Automated tests** | ✅ 377 tests, 18 files, in CI. Mutation-checked: **141 deliberate regressions attempted, 139 caught** (27 on staff accounts/RBAC, 24 on Days 2–5, 90 on Days 6–13 — per-group breakdown in `partial.md`). Both survivors are redundant tenant clauses whose load-bearing twins *were* caught; each was verified behaviour-neutral and documented in place. Separately, one guard was found to be **unreachable** and deleted rather than left implying a check that could never fire |
 | **Voice pipeline end to end** | ❌ Never — no provider keys |
 | **Email delivery** | ❌ Never — no `EMAIL_API_KEY`. Reset and invite flows are tested with the sender stubbed, so the token lifecycle is proven and the Resend call is not |
 | **Live card payment** | ❌ Never — Stripe in simulation mode |

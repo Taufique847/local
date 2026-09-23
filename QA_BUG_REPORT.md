@@ -1,5 +1,64 @@
 # QA Bug Report
 
+---
+
+> ## WARNING: Historical record - all seven bugs are fixed
+>
+> **This report is left exactly as it was written on 22 September 2026.** It is a record of what one
+> adversarial testing session found, not a description of the code today. It is deliberately not
+> edited to match the current build: a bug report that gets quietly rewritten once the bugs are
+> fixed cannot be used to check whether they really were.
+>
+> Every `Status: CONFIRMED` below now reads **FIXED**, and each fix carries a regression test that
+> was verified by deliberately re-breaking it:
+>
+> | Bug | Fix |
+> |---|---|
+> | **001** Worker endpoints, no tenant scoping (Critical) | Every `/api/worker/*` lookup scoped by `businessId`; a technician additionally scoped to their own `technicianId`. `tests/tenancy/worker-scoping.test.ts`. |
+> | **002** Double-booking race (High) | Conflict check and insert run under a per-business MongoDB distributed lock. Tested with 5 genuinely parallel bookings for one slot. |
+> | **003** Validation failures returned 500 (High) | Zod schemas on every mutating route, including `PUT /api/appointments/:id`, which had none at all. |
+> | **004** Conversion not idempotent (Medium) | A second conversion returns the existing invoice rather than billing twice. |
+> | **005** Logout did not revoke the token (Medium) | `tokenVersion` checked per request, rotating refresh tokens with reuse-as-theft detection, and a detected reuse drops the session family. |
+> | **006** Estimate expiry never enforced (Low) | An expired quote is marked `expired` on read and cannot be approved. |
+> | **007** Starter services ignored the trade (Low) | `defaultServicesForTrade(businessType)`. |
+>
+> **One precondition stated throughout this report is no longer true.** Several bugs note "no
+> special role needed since RBAC is not enforced anywhere in this application." RBAC is now
+> enforced on two independent axes - `role` for platform-operator endpoints and `businessRole`
+> ('owner' | 'dispatcher' | 'technician') for tenant endpoints - both read from the database per
+> request rather than trusted from the token.
+>
+> **Sixteen further defects were found and fixed after this session**, none of them by this report:
+> seven during a planning read of the nine partial features, and nine more while building them.
+> The ones worth knowing about, because they were all invisible rather than noisy:
+>
+> - Field-app invoices read `svc.price` on a model whose price field is `startingPrice`, so **every
+>   invoice generated from the field app billed a hardcoded $189** regardless of the job.
+> - Texting `STOP` did nothing. `isOptedOut` was read and written through `as any` on a field that
+>   was not on the schema, so Mongoose silently discarded every write - a TCPA violation, not a
+>   cosmetic bug.
+> - A lead-recovery booking queried `Service.findOne({ active: true })` on a model whose field is
+>   `status`. With Mongoose 8's `strictQuery: false` that matched nothing, so a **duplicate service
+>   was created on every recovery booking.**
+> - The technician dispatch text built its "Access/Gate" line from whichever `instruction` memory a
+>   loop saw last, so a customer with a dog and no gate code had their pet warning printed as their
+>   gate code. Worse, the recipient phone number defaulted to the **customer''s**, so an unassigned
+>   job texted the homeowner "DISPATCH ALERT" containing their own gate code.
+> - Appointment times were formatted with `toLocaleString` and no `timeZone`, so on a UTC host a
+>   1:00 PM Phoenix job was confirmed to the customer as 8:00 PM.
+> - `lifetimeValue` and `Appointment.technicianId` were both declared and written by nothing.
+> - 151 lines of fabricated route-optimisation data on the appointments page ("32% Drive-Time
+>   Saved", "+$64 / Day Saved", three invented customers) and a hardcoded equipment registry shown
+>   identically to every customer in every business.
+>
+> The common cause of six of them: **code reading or writing a field that is not on the schema.**
+> Mongoose is silent in both directions - strict mode drops an undeclared write, and
+> `strictQuery: false` lets an undeclared filter key match nothing. Neither produces an error.
+>
+> For current status see `FINAL.md`. For what remains, `partial.md`.
+
+---
+
 ## Testing Information
 
 * **Project:** BlueCollar AI (AI phone receptionist + CRM/ops platform for home-service contractors)

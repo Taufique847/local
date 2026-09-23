@@ -16,11 +16,35 @@
 >   removed; it never charged anything and handling raw card data in our own DOM
 >   was a PCI problem.
 >
+> - **Equipment registry (§2)** — ✅ now built, and larger than this doc proposed. A real
+>   `Equipment` model (type, brand, model number, serial, install year, filter size,
+>   location, warranty) plus structured `Customer.property` (gate code, access
+>   instructions, pets, parking). Editable in an Equipment & Access tab on the customer
+>   drawer, and injected into both the voice prompt and the technician dispatch text. A
+>   dry-run-by-default migration lifts the old regex-derived `AgentMemory` values into it
+>   without deleting them, because those rows carry the provenance of a value a regex
+>   guessed.
+> - **Invoices and quotes are now actually sent to the customer.** This doc assumed they
+>   already reached them. They did not: an invoice was created with `status: 'unpaid'`
+>   and a `shareToken` that only ever appeared in the owner's own UI, so the payment
+>   portal and the e-signature flow were both unreachable by the person they were for.
+>
 > What has **not** been built from this doc: dual-track call waveform, one-click
 > call→appointment conversion, urgency filter pills, PDF transcript export,
-> double-booking conflict banner, route map view, equipment registry, Good/Better/Best
-> 3-tier proposals, price-lock countdown, card surcharge toggle, invoice aging badges,
-> one-click SMS pay link, print letterhead.
+> double-booking conflict banner, price-lock countdown, card surcharge toggle,
+> invoice aging badges, one-click SMS pay link, print letterhead.
+>
+> Two items need a more precise status than "not built":
+>
+> - **Route map view** — still not built, and the fabricated version has been removed.
+>   The appointments page previously rendered an invented route map ("32% Drive-Time
+>   Saved", "38.4 Miles", "+$64 / Day Saved", hardcoded Dallas coordinates, three
+>   invented customers, and a button that only fired a toast). It now shows an honest
+>   "not available" panel. There is no geocoding provider and no coordinates on any
+>   record, so this needs that foundation first.
+> - **Good/Better/Best 3-tier proposals** — the **backend exists** (`Estimate.tiers`,
+>   with a recommended flag, rendered on the portal quote page). What is missing is the
+>   UI for an owner to *build* the tiers.
 >
 > Correction to §7: the claim that a 3% surcharge is simply a toggle understates it.
 > Card surcharging is regulated differently by state and by card network, and

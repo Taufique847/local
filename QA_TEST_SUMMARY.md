@@ -2,6 +2,51 @@
 
 **Project:** BlueCollar AI | **Date:** September 22, 2026 | **Tester:** Autonomous QA Agent
 
+---
+
+> ## ⚠️ Historical record — read this first
+>
+> **This is a point-in-time record of one testing session, left as it was written.** Its findings
+> describe the build on 22 September 2026, not the build today. It is not edited to match the
+> current code, because a QA report that gets quietly rewritten is worthless as a record of what
+> was actually found.
+>
+> **All seven bugs in this report are fixed**, each with a regression test that was confirmed by
+> deliberately re-breaking the fix:
+>
+> | # | Finding | Now |
+> |---|---|---|
+> | 001 | Worker endpoints bypassed tenant isolation (Critical) | Fixed. Every `/api/worker/*` lookup is scoped by `businessId`, and a technician is additionally scoped to their own `technicianId`. Covered by `tests/tenancy/worker-scoping.test.ts`. |
+> | 002 | Double-booking race condition (High) | Fixed. The conflict check and the insert run under a per-business MongoDB-backed lock, so they can no longer be split. Covered by a 5-way parallel booking test. |
+> | 003 | Validation failures returned 500 (High) | Fixed. Zod schemas on every mutating route; the previously unvalidated `PUT /api/appointments/:id` included. |
+> | 004 | Estimate-to-invoice conversion not idempotent (Medium) | Fixed. A second conversion returns the invoice that already exists. |
+> | 005 | Logout did not revoke the token (Medium) | Fixed. Short-lived access tokens carry a `tokenVersion` that `authMiddleware` checks per request, refresh tokens rotate with reuse-as-theft detection, and a detected reuse drops the whole session family. |
+> | 006 | Estimate expiry stored but never enforced (Low) | Fixed. An expired quote is marked `expired` on read and can no longer be approved. |
+> | 007 | Starter services ignored the declared trade (Low) | Fixed. `defaultServicesForTrade(businessType)`. |
+>
+> **Two claims in this report are no longer true of the code:**
+>
+> - *"the application has no enforced role hierarchy"* — it does now. Two independent axes:
+>   `role` ('user' \| 'admin') gates platform-operator endpoints, `businessRole`
+>   ('owner' \| 'dispatcher' \| 'technician') gates tenant endpoints. Both are read from the
+>   database per request, so a demotion applies on the next call rather than at token expiry.
+>   The "RBAC matrix would be vacuous" note under Untested Areas no longer applies.
+> - *"~90 discrete adversarial test cases"* run by hand — there is now a **377-test automated
+>   suite** (18 files) in CI covering tenancy, webhook signatures, RBAC, token lifecycles,
+>   job-completion pricing, notifications, templates, equipment and property data, and segment
+>   campaigns. 141 mutations have been attempted against its guards and 139 caught; both
+>   survivors are redundant tenant clauses whose load-bearing twins were caught, verified
+>   behaviour-neutral and documented in place.
+>
+> **Two Untested Areas from this report are still untested, for the same reasons:** the live voice
+> pipeline (no real call has ever been handled) and real Stripe payments (`STRIPE_SECRET_KEY`
+> unset). A third has been added since: no email has ever been sent, because `EMAIL_API_KEY` is
+> unset.
+>
+> For current status see `FINAL.md`. For what remains, `partial.md`.
+
+---
+
 ## Coverage
 
 **Features tested:**
