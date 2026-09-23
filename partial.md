@@ -8,7 +8,7 @@
 
 ## 1. Read this first
 
-**Honest total: ~24 working days, not 15–20.**
+**Honest total: ~24 working days, not 15–20.** Day 0 (the defects in §2) is now complete, leaving **~22.5**.
 
 The 15–20 day figure came from effort notes written without re-reading the code. Verifying it changed three estimates upward, because three features are less built than the label suggested:
 
@@ -22,9 +22,24 @@ The 15–20 day figure came from effort notes written without re-reading the cod
 
 ---
 
-## 2. Day 0 — bugs found while verifying (do these first)
+## 2. Day 0 — defects found while verifying · ✅ ALL DONE
 
-These are not features. They are defects in shipped code, each found while reading for this plan. Four of the five are cheap. Together: **1.5 days.**
+> **Status: complete.** All seven are fixed, each with tests, and each test was verified by deliberately reintroducing the defect and confirming the suite goes red. 62 new tests; 20 mutations attempted, 20 caught.
+>
+> The count went from five to seven: **BUG-F and BUG-G were found while fixing BUG-C**, and one of them is the most serious defect in this document.
+
+These were not features. They were defects in shipped code, each found while reading for this plan.
+
+### A theme worth naming
+
+Four of the seven share one root cause: **code reading or writing a field that does not exist on the schema.**
+
+- `svc.price` — Service has `startingPrice` (BUG-A)
+- `customer.isOptedOut` — never declared, written through `as any` (BUG-F)
+- `Service.findOne({ active: true })` — Service has `status` (BUG-G)
+- `customer.propertyType` — never declared, collected by the UI anyway (BUG-E)
+
+Mongoose makes all four silent. Strict mode drops an undeclared write without complaint, and Mongoose 8 defaults `strictQuery` to false so an undeclared filter key goes to MongoDB and simply matches nothing. Nothing throws, nothing logs, and the fallback value looks plausible. A `grep` for `as any` near a model, and a check that every queried key exists on its schema, would find the rest of this class if any remain.
 
 ### BUG-A — Every technician-completed invoice silently bills $189
 `backend/src/services/worker.service.ts` (~line 217–235) reads `svc.price`:
@@ -33,14 +48,14 @@ unitPrice: svc.price || 189,
 ```
 The `Service` model has **no `price` field** — it is `startingPrice` (`backend/src/models/service.model.ts`). So `svc.price` is always `undefined` and every invoice generated from the field app charges the hardcoded `189` regardless of what the service actually costs. Same function hardcodes `95` labour, `89` diagnostic credit, and a **non-overridable** `taxRate = 0.0825`.
 
-*Fix:* read `startingPrice`, and source the credit/tax from policy (this is the seam Day 21 builds on). **~2 hours.** Needs a test: an invoice generated from a $450 service must total from 450, not 189.
+**✅ Fixed.** Reads `startingPrice`; when a service carries no price it bills the authorised `diagnosticFee` rather than inventing a number. `taxRate` and `laborRate` are now fields on `BusinessPolicy` (defaulted to the old literals so existing billing is unchanged), and `invoice.service.ts` / `estimate.service.ts` fall back to the business's rate instead of `0.0825`. `laborRate` uses `??` not `||`, so an explicit `0` is honoured. This is the seam **Day 14** builds on. 13 tests, 5/5 mutations caught.
 
 ### BUG-B — `technicianId` is never written, so the worker PWA's per-technician scoping does nothing
 Last session added technician-scoped job access (`worker.service.ts` `findOwnedAppointment` filters `$or: [{ technicianId }, { technicianId: null }]`). But **no code anywhere writes `appointment.technicianId`** — `createAppointmentUnlocked` only copies `input.technicianName`, and `updateAppointment` only patches `technicianName`. Every appointment has `technicianId: null`, which the filter treats as "unassigned and therefore visible".
 
 Net effect: the scoping I shipped is inert. A technician still sees the whole board. The tests pass because they set `technicianId` directly in fixtures — they proved the filter works, not that anything populates it.
 
-*Fix:* write `technicianId` on create and update, accept it in the booking modal, and backfill by matching `technicianName`. **~4 hours.** This is a prerequisite for Day 17–20.
+**✅ Fixed.** `technicianId` is written on create and update, validated against the workspace's own roster (another business's or an inactive technician is a 404), and the display name is derived from the record so the denormalised copy cannot drift. The booking modal gained an "Assigned Technician" picker — there was no field for it at all before. `PUT /api/appointments/:id` also gained a schema; it previously accepted any body. A conservative backfill script (`npm run backfill:technician-ids`, dry-run by default) matches existing rows by name and **skips ambiguous matches** rather than guessing which colleague owns a job. 14 tests driven through the real booking path rather than fixtures, 4/4 mutations caught.
 
 ### BUG-C — Replying "YES" to a reminder can book a duplicate appointment
 `backend/src/services/communication.service.ts` line 242:
@@ -51,19 +66,49 @@ const optInKeywords = ['START', 'UNSTOP', 'YES'];
 
 So a customer confirming an existing appointment can be given a second one.
 
-*Fix:* remove `YES` from opt-in keywords (`START`/`UNSTOP` are the carrier-standard ones); make appointment confirmation an explicit keyword on Day 13. **~1 hour.** Needs a test.
+**✅ Fixed — and my first attempt was wrong.** Removing `YES` from the keyword list did *not* stop the duplicate booking. It made the message fall straight through to the recovery handler instead, whose intent regex matches `yes` anyway. Deleting the keyword treated the symptom.
+
+The real fix is an invariant rather than a vocabulary: **never book a second appointment for a customer who already has one upcoming.** `triggerRecoveryForCall` already applied that check before starting a campaign; the reply path now does too, and answers by pointing at the appointment they already have. A keyword list cannot separate "yes, book me" from "yes, I'll be there", so it was never going to be the right place to fix this.
+
+`YES` is still gone (it is not a carrier-standard opt-in), the opt-in branch now returns instead of falling through, and `CANCEL` deliberately stays an opt-out because it is carrier-mandated — appointment cancellation by reply needs its own keyword. Also fixed while in here: the opt-out note was appended to `customer.notes` on *every* matching message, and `notes` caps at 2000 characters, so a customer texting STOP enough times would eventually make `customer.save()` throw and take the inbound webhook down. 25 tests, 6/6 mutations caught.
+
+### BUG-F — Texting STOP did nothing. *(Found while fixing BUG-C.)*
+The most serious defect here, and it was not on the original list.
+
+`isOptedOut` was **not a field on the Customer schema**, yet `communication.service.ts` both read and wrote it through `(customer as any)`. Mongoose is strict by default, so every write was silently discarded, and the guard in `sendMessage` was reading `undefined` on every send.
+
+A customer who texted STOP kept receiving messages. That is a TCPA violation with statutory damages **per message**, not a cosmetic bug. It was invisible because the cast suppressed the type error and nothing ever threw.
+
+Found because a test asserted `isOptedOut` was `false` after a reload and got `undefined` back.
+
+**✅ Fixed.** `isOptedOut` and an `optedOutAt` audit timestamp are now real fields, both `as any` casts are gone, and the state is surfaced on the customer DTO and as a "Texts off" badge in the list so an operator does not compose a message the server will refuse.
+
+### BUG-G — Every SMS-recovery booking created a duplicate service record. *(Found while fixing BUG-C.)*
+`lead-recovery.service.ts` looked up the default service with `Service.findOne({ businessId, active: true })`. `Service` has no `active` field — it carries `status: 'active' | 'inactive'`. Mongoose 8 defaults `strictQuery` to false, so the unknown key went through to MongoDB and matched nothing, and the `if (!service)` branch below created a fresh "HVAC Diagnostic & Service Inspection" on **every single booking**. The service catalogue grew by one per recovered lead.
+
+`appointment.service.ts` already used the correct `status: 'active'` form, which is what made the discrepancy findable.
+
+**✅ Fixed.** Queries and creates now use `status`.
 
 ### BUG-D — The "Dispatch Route Map" is entirely fabricated
 `frontend/app/app/appointments/page.tsx` lines 865–1017. A "32% Drive-Time Saved" badge, `38.4 Miles`, `1 hr 14 mins`, `+$64 / Day Saved`, three hardcoded pins (North Dallas / Addison / Plano), a literal `Coordinates: 32.7767° N, 96.7970° W`, invented leg times (`'Depot ➔ Stop 1 (12 mins)'`), and three invented customers shown when there is no data. The "Dispatch Route to Techs" button calls no API — it only fires a toast claiming the route was sent.
 
 This is exactly the class of fabricated data removed everywhere else in the product. It should not survive to a demo.
 
-*Fix now:* replace with an honest "not available yet" placeholder, same as `/app/settings/locations`. **~1 hour.** Day 20 builds the real thing.
+**✅ Fixed.** 151 lines removed and replaced with an honest "not available yet" panel matching the existing `FeatureUnavailable` pattern, which also says what *does* work today — technician assignment, ZIP-based service zones, and the real dispatch SMS with a Google Maps link. The tab is now labelled "Route Map · Soon". The `useToast` hook went with it: its only remaining use was faking the confirmation. Day 20–23 builds the real thing.
 
-### BUG-E — Customer list sends a filter the backend silently drops
-`frontend/app/app/customers/page.tsx` sends `query.propertyType`; `CustomerService.getCustomers` has no such filter, so it is discarded and the dropdown does nothing. The status dropdown also offers `lead`, which is not in the Customer status enum (`active|inactive`).
+### BUG-E — A whole `propertyType` feature that was never wired up
+Bigger than it first looked. `propertyType` was **not a field on the backend Customer schema**, yet the frontend collected it (a residential/commercial toggle in the customer form), sent it as a list filter, and displayed it in **five** places. Zod stripped it on write, the service never read the filter, and all five screens read `undefined` and printed "Residential" for every customer. The status dropdown also offered `lead`, which is not in the enum.
 
-*Fix:* remove both controls now; Day 15 replaces them with filters that work. **~1 hour.**
+Worse, one of those five places used it to **fabricate equipment**:
+
+```tsx
+{cust.propertyType === 'commercial' ? 'Carrier 10T RTU' : 'Carrier 4T Split (410A)'}
+```
+
+Every customer row asserted a specific installed HVAC unit the business had never entered. No equipment is recorded anywhere in the product — that is Day 10's work.
+
+**✅ Fixed.** Rather than delete a form field people have been filling in, `propertyType` is now a real field end to end, so all five screens became truthful at once. It is deliberately **not** defaulted: absent means "not recorded", which is a different claim from "residential". The filter works, the fabricated equipment badge is gone (replaced by the real opt-out state), the "Type" column shows an em-dash when unrecorded, and the bogus `lead` option is removed. 10 tests, 5/5 mutations caught.
 
 ---
 
@@ -81,7 +126,9 @@ This is exactly the class of fabricated data removed everywhere else in the prod
 | 41 | Template management | 6 literals in a `switch`, of which **only one is ever rendered**; the rest of real traffic is inline literals at ~12 call sites | No template model, no per-business override, no editor. `renderTemplate` does not even receive a `businessId`. Only per-business copy anywhere is `aiDisclosureText` (voice only) | 2 |
 | 42 | Pricing | Line items, quantity × price, tax, diagnostic credit, 3-tier estimates | The same 6 lines of arithmetic **duplicated in 3 files**. No travel fee, no discount, no coupon. `BusinessPolicy` has only `diagnosticFee`/`emergencyFee` — **no `taxRate`, no labour rate**. `emergencyFee` is quoted by the AI and **never billed**. Tax is one flat blended rate; customer state/zip never consulted. Plus BUG-A | 1.5 |
 
-Subtotal: **22.5 days** of feature work + **1.5 days** of Day 0 = **24 days**.
+Subtotal: **22.5 days** of feature work. Day 0 is done, so **~22.5 days remain** of the original 24.
+
+Two rows above are now partly addressed by the Day 0 work: #42's missing `taxRate` and labour rate exist, and #18's `technicianId` is written. The day estimates are unchanged — those were prerequisites, not the features.
 
 ---
 
@@ -89,9 +136,10 @@ Subtotal: **22.5 days** of feature work + **1.5 days** of Day 0 = **24 days**.
 
 Ordering logic: Day 0 defects first. Then the **notification spine** (#38/#39/#41), because it is the only group with a hard internal dependency and it is what a launched customer notices first. Then data foundations (#10/#13), then pricing (#42), then the two heavy UI features (#14/#18) last — they are the most visible but the least likely to lose a customer if unfinished.
 
-### Days 1–2 · Day 0 defects
-- **Day 1** — BUG-A ($189 invoice) with a test; BUG-B (`technicianId` write path + backfill script) with a test.
-- **Day 2 (half)** — BUG-C (`YES` keyword) with a test; BUG-D (mock route map → honest placeholder); BUG-E (dead filters removed). Commit.
+### ~~Days 1–2 · Day 0 defects~~ · ✅ DONE
+All seven fixed with 62 tests and 20 mutation checks. The day numbering below is left unchanged so the dependency graph still reads correctly — start at Day 2–3.
+
+One follow-up this surfaced, not yet done: **run the backfill in dry-run against production data** (`npm run backfill:technician-ids`) before `--apply`, and look at the ambiguous count. Jobs whose `technicianName` matches two technicians are skipped by design and need assigning by hand.
 
 ### Days 2–5 · Feature 38, part 1: email becomes real
 - **Day 2 (half)–3** — Make email loggable and sendable as a channel.
@@ -164,14 +212,14 @@ Days 1–15, then **16, 17, 20** and Day 24.
 That adds timezone correctness, per-technician conflicts, week/month views, and real technician assignment — skipping drag-and-drop, recurrence, geocoding and the map. Those four are the genuinely optional ones, and the three you keep include the two correctness fixes (Day 16) that matter more than any of the UI.
 
 ### What not to cut
-Day 1 and Day 14. Day 1 fixes an invoice that bills the wrong amount and a scoping guard that silently does nothing. Day 14 is the pricing extraction every other pricing change depends on. Both are money or correctness, not polish.
+Day 14, the pricing extraction every other pricing change depends on. (Day 1 was the other one on this list; it is done.)
 
 ---
 
 ## 6. Dependencies, in order
 
 ```
-BUG-B (technicianId)  ──▶ Day 17 (technician lanes) ──▶ Day 20 (assignment)
+BUG-B (technicianId)  ──▶ Day 17 (technician lanes) ──▶ Day 20 (assignment)   [BUG-B done]
 Day 2–3 (NotificationService) ──▶ Day 4, 5, 8, 9, 13
 Day 5 (reminders exist)       ──▶ Day 6, 7  (#39 is blocked without this)
 Day 8 (template model)        ──▶ Day 9 (editor)

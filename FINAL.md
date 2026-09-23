@@ -1,6 +1,6 @@
 # BlueCollar AI — Final Feature Status
 
-> **Verified:** 22 September 2026, by reading `backend/src` and `frontend/app` directly, by running the built server against a live database, and — as of the latest revision — by a 107-test automated suite.
+> **Verified:** 23 September 2026, by reading `backend/src` and `frontend/app` directly, by running the built server against a live database, and by a 169-test automated suite whose guards were each confirmed by deliberately breaking them.
 >
 > Reference vision: `targetFeaturesIdea.md` (86 numbered features, sections A–J).
 > This file supersedes the status sections of `PROJECT_STATUS_AND_ROADMAP.md`, which was written before the Week 1–4 hardening, Tier 1/Tier 2 work and QA bug fixes landed.
@@ -129,11 +129,14 @@ Each row was confirmed in code, and where marked ✓runtime, exercised against a
 | Password reset by email, single-use, revokes all sessions | ✅ Built ✓tested (send path unexercised) |
 | Staff invitations — email link, single use, tenant-bound | ✅ Built ✓tested (send path unexercised) |
 | Media-stream WebSocket authorization (single-use signed token) | ✅ Built ✓tested |
-| Automated test suite — 107 tests over tenancy, money and auth | ✅ Built, wired into CI |
+| Automated test suite — 169 tests over tenancy, money, auth and pricing | ✅ Built, wired into CI |
 | Data retention sweep + per-customer data erasure | ✅ Built |
 | AI/recording disclosure spoken before the assistant answers | ✅ Built |
 | Docker, compose, CI (typecheck/build/secrets/image) | ✅ Built |
 | Atomic invoice/estimate numbering | ✅ Built ✓runtime |
+| Per-business tax and labour rates on policy | ✅ Built ✓tested |
+| Technician assignment on appointments (`technicianId`) | ✅ Built ✓tested |
+| SMS opt-out that actually persists and blocks sending | ✅ Built ✓tested |
 
 ---
 
@@ -147,7 +150,9 @@ Each row was confirmed in code, and where marked ✓runtime, exercised against a
 | A2 | **Password reset flow** | ✅ Done | There was no recovery path at all — a forgotten password meant permanent lockout. | — |
 | A3 | **Commit the work** | ✅ Done | Committed in four logical commits on `feat/staff-accounts-rbac-and-tests` and pushed. Verified no `.env`, key material or temp file entered any commit. | — |
 | ~~A4~~ | ~~**Rotate the leaked credential**~~ | ❌ **Withdrawn — was never true** | See below. | — |
-| A5 | **Tests for the money and tenancy paths** | ✅ Done | The QA pass found a critical cross-tenant hole precisely because nothing guarded these. 107 tests now cover worker tenant + per-technician scoping, portal share tokens, Stripe and Twilio webhook signatures, RBAC, password reset, invitations and the media-stream token. | — |
+| A5 | **Tests for the money and tenancy paths** | ✅ Done | The QA pass found a critical cross-tenant hole precisely because nothing guarded these. 169 tests now cover worker tenant + per-technician scoping, portal share tokens, Stripe and Twilio webhook signatures, RBAC, password reset, invitations, the media-stream token, job-completion pricing and SMS consent. | — |
+
+**On defects found since.** Writing `partial.md` — a day-by-day plan to finish the nine partial features — required reading all nine at model, service, controller and page level. That read turned up **seven defects in shipped code**, all now fixed with tests and mutation checks. Four shared one root cause worth naming: code reading or writing a field that does not exist on the schema, which Mongoose silently tolerates in both directions. The worst of them meant a customer who texted STOP kept receiving messages. Details in `partial.md` §2.
 
 **On A5 — what the tests are actually worth.** Passing tests prove nothing on their own, so each guard was deliberately broken and the suite re-run to confirm it fails. Seven mutations were tried (dropping `businessId` from the appointment filter, honouring a caller-supplied `technicianId` on writes, removing the billing owner gate, disabling Twilio signature checks, re-allowing an ObjectId as a portal share token, making password reset reveal whether an email is registered, and skipping the stream token's signature comparison). Six were caught immediately. The seventh was not, which exposed a real coverage gap — a technician naming a colleague via query parameter on a *mutation* — and a test was added for it. All seven are now caught.
 
@@ -217,6 +222,8 @@ Worth knowing before a demo, because each one reads as finished in the UI.
 | **Call "recordings"** | No audio is ever stored. The playback control on the calls page is the browser reading the transcript aloud. Labels were corrected, but there is no recording to produce if a customer or lawyer asks. |
 | **Landing page voice demo** | A scripted transcript with a play button, labelled "Scripted example". It is honest now, but it is not the product. |
 | **Multi-location and integrations settings** | Honest "not available yet" placeholders. No location model, no calendar OAuth. |
+| **Dispatch route map** | ~~Fabricated: invented mileage, drive time, a "32% Drive-Time Saved" badge, hardcoded Dallas pins and three invented customers, behind a button that only fired a toast.~~ **Removed.** Now an honest "not available yet" panel. There is still no geocoding, no coordinates on a job or technician, and no routing — Day 20–23 in `partial.md`. |
+| **Customer equipment badge** | ~~Every customer row showed "Carrier 4T Split (410A)" or "Carrier 10T RTU", chosen from a property type that was itself never persisted.~~ **Removed.** No equipment is recorded anywhere in the product; that model is Day 10 in `partial.md`. |
 | **Technician logins** | ~~Technicians are records, not users.~~ **Fixed.** Technicians can now hold their own accounts, linked to a dispatch record, and the field app scopes to their own jobs. One gap remains: `frontend/app/worker/page.tsx` still has no client-side auth guard, so an unauthenticated visitor gets a page that renders and then fails its API calls. The data is safe — every `/api/worker/*` route is behind authentication — but the page should redirect rather than break. |
 | **Voice at scale** | `VoiceStreamHandler` and `VoiceSessionService` hold sessions in in-process `Map`s, so voice works on exactly one instance. The cron scheduler is now multi-replica safe; voice is not. |
 
@@ -241,7 +248,10 @@ Worth knowing before a demo, because each one reads as finished in the UI.
 | Password reset lifecycle | Automated — single use, expiry, email-change invalidation, session revocation, no enumeration |
 | Staff invitations | Automated — single use, revocation, expiry, cross-tenant technician link refused, privilege escalation via request body refused |
 | Media-stream token | Automated — tampered, re-signed, expired and replayed tokens all refused |
-| **Automated tests** | ✅ 107 tests, 8 files, in CI. Mutation-checked: all 7 deliberate regressions caught |
+| Job-completion pricing | Automated — a $450 service bills 450, per-business tax and labour rates, diagnostic credit against the taxable base |
+| Technician assignment | Automated through the real booking path — cross-tenant and inactive technicians refused, name derived from the record |
+| SMS consent | Automated — STOP persists and blocks sending, START restores, no duplicate booking from a consent reply |
+| **Automated tests** | ✅ 169 tests, 12 files, in CI. Mutation-checked: 27 deliberate regressions attempted, all 27 caught |
 | **Voice pipeline end to end** | ❌ Never — no provider keys |
 | **Email delivery** | ❌ Never — no `EMAIL_API_KEY`. Reset and invite flows are tested with the sender stubbed, so the token lifecycle is proven and the Resend call is not |
 | **Live card payment** | ❌ Never — Stripe in simulation mode |
