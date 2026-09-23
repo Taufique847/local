@@ -29,6 +29,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { EquipmentPanel } from './equipment-panel';
 
 interface Customer360DrawerProps {
   customerId: string | null;
@@ -46,7 +47,9 @@ export function Customer360Drawer({
   const [data, setData] = useState<any | null>(null);
   const [memories, setMemories] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<'timeline' | 'memory' | 'info'>('timeline');
+  const [activeTab, setActiveTab] = useState<'timeline' | 'equipment' | 'memory' | 'info'>(
+    'timeline'
+  );
   const [timelineFilter, setTimelineFilter] = useState<'all' | 'call' | 'appointment' | 'sms' | 'lead'>('all');
 
   // Tag editor state
@@ -326,6 +329,21 @@ export function Customer360Drawer({
                 >
                   Activity Timeline ({timeline.length})
                 </button>
+                {/* Structured equipment and access. Separate from the memory tab
+                    below, which holds what the assistant *inferred* — one is a record,
+                    the other is a guess, and showing them as one thing is how a
+                    regex's output came to be treated as confirmed fact. */}
+                <button
+                  onClick={() => setActiveTab('equipment')}
+                  className={`py-3 px-4 text-xs font-semibold border-b-2 transition-colors flex items-center gap-1.5 ${
+                    activeTab === 'equipment'
+                      ? 'border-blue-600 text-blue-600'
+                      : 'border-transparent text-slate-500 hover:text-slate-900'
+                  }`}
+                >
+                  <Wrench className="w-3.5 h-3.5 text-blue-500" />
+                  Equipment & Access
+                </button>
                 <button
                   onClick={() => setActiveTab('memory')}
                   className={`py-3 px-4 text-xs font-semibold border-b-2 transition-colors flex items-center gap-1.5 ${
@@ -335,7 +353,7 @@ export function Customer360Drawer({
                   }`}
                 >
                   <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-                  Property & Equipment Memory ({memories.length})
+                  What the assistant learned ({memories.length})
                 </button>
                 <button
                   onClick={() => setActiveTab('info')}
@@ -453,68 +471,68 @@ export function Customer360Drawer({
                   </div>
                 )}
 
+                {activeTab === 'equipment' && (
+                  <EquipmentPanel
+                    customerId={customerId!}
+                    customer={data?.customer ?? null}
+                    onUpdated={() => {
+                      void fetchProfile();
+                      onCustomerUpdated?.();
+                    }}
+                  />
+                )}
+
                 {activeTab === 'memory' && (
                   <div className="space-y-4">
-                    <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-900 flex items-start gap-3">
-                      <Sparkles className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
+                    {/*
+                      Reworded to say what this actually is. It previously read "M19
+                      Long-Term Agentic Memory Active" and claimed the assistant recalls
+                      equipment, filter sizes and gate codes — which is now true, but
+                      through the Equipment & Access tab, not through these rows. These
+                      are the raw phrases a regex pulled off a transcript, kept for
+                      provenance.
+                    */}
+                    <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-start gap-3">
+                      <Sparkles className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
                       <div>
-                        <p className="font-semibold">M19 Long-Term Agentic Memory Active</p>
-                        <p className="text-blue-700 mt-0.5 leading-relaxed">
-                          The AI phone receptionist recalls past HVAC equipment, filter sizes, gate
-                          access codes, and pet alerts during live conversations.
+                        <p className="font-semibold">Picked up from phone calls</p>
+                        <p className="text-amber-800 mt-0.5 leading-relaxed">
+                          Phrases the assistant extracted from what callers said. Confirmed
+                          details live under <span className="font-semibold">Equipment &amp;
+                          Access</span> — these are kept so you can see where a value came
+                          from, and they are not what the assistant reads out.
                         </p>
                       </div>
                     </div>
 
-                    {/* HVAC & Plumbing Installed Equipment Registry */}
-                    <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs space-y-3">
-                      <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
-                        <div className="flex items-center gap-2">
-                          <div className="p-1.5 rounded-lg bg-blue-50 text-blue-600 border border-blue-100">
-                            <Wrench className="w-4 h-4" />
-                          </div>
-                          <div>
-                            <h4 className="text-xs font-bold text-slate-900">HVAC &amp; Plumbing Equipment Registry</h4>
-                            <p className="text-[10px] text-slate-400">On-site equipment specifications &amp; consumables</p>
-                          </div>
-                        </div>
-                        <Badge className="bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px]">
-                          Active Warranty
-                        </Badge>
-                      </div>
+                    {/*
+                      An "HVAC & Plumbing Equipment Registry" card used to sit here
+                      showing a Carrier Infinity 16, a 20x25x4 MERV 11 filter, R-410A
+                      Puron with an 8.2 lb factory charge, a Rheem tankless heater, an
+                      Ecobee thermostat, a June 2021 install date and an "Active
+                      Warranty" badge. None of it came from anywhere: every value was a
+                      literal, so every customer in every business was shown the same
+                      six specifications.
 
-                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-xs">
-                        <div className="p-2 bg-slate-50 rounded-lg border border-slate-100">
-                          <span className="text-[10px] uppercase font-bold text-slate-400 block">Primary System</span>
-                          <span className="font-semibold text-slate-900">Carrier Infinity 16</span>
-                          <span className="text-[10px] text-slate-500 block">4.0 Ton Split Heat Pump</span>
+                      That is the kind of detail a technician loads a van from. Real
+                      equipment now lives on the Equipment & Access tab, where an empty
+                      list reads as empty.
+                    */}
+                    <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-white p-3">
+                      <div className="flex items-center gap-2">
+                        <div className="p-1.5 rounded-lg bg-blue-50 text-blue-600 border border-blue-100">
+                          <Wrench className="w-4 h-4" />
                         </div>
-                        <div className="p-2 bg-slate-50 rounded-lg border border-slate-100">
-                          <span className="text-[10px] uppercase font-bold text-slate-400 block">Filter Spec</span>
-                          <span className="font-semibold text-blue-700">20x25x4 MERV 11</span>
-                          <span className="text-[10px] text-slate-500 block">Media Cabinet Filter</span>
-                        </div>
-                        <div className="p-2 bg-slate-50 rounded-lg border border-slate-100">
-                          <span className="text-[10px] uppercase font-bold text-slate-400 block">Refrigerant</span>
-                          <span className="font-semibold text-slate-900">R-410A Puron</span>
-                          <span className="text-[10px] text-slate-500 block">Factory charge 8.2 lbs</span>
-                        </div>
-                        <div className="p-2 bg-slate-50 rounded-lg border border-slate-100">
-                          <span className="text-[10px] uppercase font-bold text-slate-400 block">Water Heater</span>
-                          <span className="font-semibold text-slate-900">Rheem Tankless Gas</span>
-                          <span className="text-[10px] text-slate-500 block">9.5 GPM • 199k BTU</span>
-                        </div>
-                        <div className="p-2 bg-slate-50 rounded-lg border border-slate-100">
-                          <span className="text-[10px] uppercase font-bold text-slate-400 block">Thermostat</span>
-                          <span className="font-semibold text-slate-900">Ecobee Smart</span>
-                          <span className="text-[10px] text-slate-500 block">Wi-Fi Connected</span>
-                        </div>
-                        <div className="p-2 bg-slate-50 rounded-lg border border-slate-100">
-                          <span className="text-[10px] uppercase font-bold text-slate-400 block">Install Date</span>
-                          <span className="font-semibold text-emerald-700">June 2021</span>
-                          <span className="text-[10px] text-slate-500 block">10-Yr Parts Warranty</span>
+                        <div>
+                          <h4 className="text-xs font-bold text-slate-900">Equipment on file</h4>
+                          <p className="text-[10px] text-slate-400">
+                            Recorded units, filter sizes, warranties and access details
+                          </p>
                         </div>
                       </div>
+                      <Button variant="outline" size="sm" onClick={() => setActiveTab('equipment')}>
+                        Open
+                      </Button>
                     </div>
 
                     {memories.length === 0 ? (

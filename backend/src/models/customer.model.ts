@@ -119,6 +119,43 @@ const customerSchema = new Schema<ICustomer>(
       enum: ['residential', 'commercial'],
       index: true,
     },
+    /**
+     * Structured facts about getting into and around the property.
+     *
+     * These were free text: a gate code lived inside an `AgentMemory` value reading
+     * "Gate/entry code is 1234", and the dispatch SMS filled its "Access/Gate" line
+     * by taking whichever `instruction` memory its loop saw last — so a customer with
+     * a dog and no gate code had "Customer mentioned dogs/pets on the property" printed
+     * as their gate code.
+     *
+     * A sub-object rather than flat fields so the whole group can be permissioned or
+     * redacted as one thing later, and so `property` reads as what it is.
+     */
+    property: {
+      /**
+       * Gate, lockbox or keypad code.
+       *
+       * Stored in plain text, and worth being clear about: this is a physical access
+       * credential readable by anyone with database access or a staff login. It is no
+       * worse than where it lived before (an `AgentMemory` value) and it has to reach
+       * the assigned technician's phone to be useful. It is deliberately excluded from
+       * every customer-facing channel and only ever appears in the dispatch SMS.
+       * Field-level encryption needs key management that does not exist here yet.
+       */
+      gateCode: { type: String, trim: true, maxlength: 40 },
+      /** "Use the side gate", "buzz unit 4B", "park on the street". */
+      accessInstructions: { type: String, trim: true, maxlength: 500 },
+      /**
+       * Tri-state on purpose. `undefined` means nobody has asked, which is not the
+       * same as "no pets" — a technician deciding whether to open a gate needs to know
+       * the difference.
+       */
+      hasPets: { type: Boolean },
+      petNotes: { type: String, trim: true, maxlength: 300 },
+      parkingNotes: { type: String, trim: true, maxlength: 300 },
+      /** Storeys, crawl space access, anything that changes what to bring. */
+      propertyNotes: { type: String, trim: true, maxlength: 500 },
+    },
   },
   {
     timestamps: true,

@@ -297,6 +297,26 @@ const addressSchema = z.object({
   zip: trimmed(20).optional(),
 });
 
+/**
+ * Structured access and property facts on a customer.
+ *
+ * Every field allows an empty string, which the service reads as "clear this" —
+ * distinct from the field being absent, which means "not part of this request". A
+ * partial form post must not wipe fields it does not know about.
+ *
+ * Declared above `createCustomerSchema` because that schema references it, and a
+ * `const` referenced before its declaration is a temporal-dead-zone error at module
+ * load, not a compile error.
+ */
+export const customerPropertySchema = z.object({
+  gateCode: z.union([trimmed(40), z.literal('')]).optional(),
+  accessInstructions: z.union([trimmed(500), z.literal('')]).optional(),
+  hasPets: z.boolean().optional(),
+  petNotes: z.union([trimmed(300), z.literal('')]).optional(),
+  parkingNotes: z.union([trimmed(300), z.literal('')]).optional(),
+  propertyNotes: z.union([trimmed(500), z.literal('')]).optional(),
+});
+
 export const createCustomerSchema = z.object({
   // Max lengths mirror customer.model.ts so the schema rejects before Mongoose
   // does, with a field-level message instead of a raw validation dump.
@@ -311,6 +331,9 @@ export const createCustomerSchema = z.object({
   status: z.enum(['active', 'inactive']).optional(),
   source: trimmed(60).optional(),
   propertyType: z.enum(['residential', 'commercial']).optional(),
+  // Declared here or Zod strips it and Mongoose never sees it — the exact bug that
+  // made `propertyType` and `diagnosticFee` silently vanish on save.
+  property: customerPropertySchema.optional(),
 });
 
 /** Every field optional, but at least one must be present. */
@@ -420,6 +443,76 @@ export const appointmentStatusSchema = z.object({
  * `rescheduleAppointment` would surface as a generic 400 with no indication of
  * which field was wrong.
  */
+/**
+ * Customer equipment.
+ *
+ * `type` is the only required field: a technician told "there is a Carrier unit
+ * somewhere" is better served by a row with a type and nothing else than by no row
+ * at all, and the rest fills in over time.
+ */
+const equipmentTypeEnum = z.enum([
+  'furnace',
+  'air_conditioner',
+  'heat_pump',
+  'mini_split',
+  'package_unit',
+  'boiler',
+  'air_handler',
+  'water_heater',
+  'thermostat',
+  'other',
+]);
+
+const equipmentLocationEnum = z.enum([
+  'attic',
+  'basement',
+  'crawl_space',
+  'garage',
+  'roof',
+  'closet',
+  'side_yard',
+  'utility_room',
+  'exterior',
+  'other',
+]);
+
+const equipmentFields = {
+  brand: trimmed(60).optional(),
+  modelNumber: trimmed(80).optional(),
+  serialNumber: trimmed(80).optional(),
+  // Upper bound left to the model, which compares against the current year rather
+  // than a literal that would go stale.
+  installYear: z.coerce.number().int().min(1950).max(2200).optional(),
+  filterSize: trimmed(40).optional(),
+  // Empty string clears it; the enum alone would reject ''.
+  location: z.union([equipmentLocationEnum, z.literal('')]).optional(),
+  locationNotes: trimmed(200).optional(),
+  warrantyExpiresAt: z
+    .union([
+      z.string().trim().refine((v) => !isNaN(new Date(v).getTime()), 'Not a valid date'),
+      z.literal(''),
+      z.null(),
+    ])
+    .optional(),
+  notes: trimmed(1000).optional(),
+  isPrimary: z.boolean().optional(),
+  active: z.boolean().optional(),
+};
+
+export const createEquipmentSchema = z.object({
+  type: equipmentTypeEnum,
+  ...equipmentFields,
+});
+
+export const updateEquipmentSchema = z
+  .object({
+    type: equipmentTypeEnum.optional(),
+    ...equipmentFields,
+  })
+  .refine((data) => Object.keys(data).length > 0, {
+    message: 'Provide at least one field to update',
+  });
+
 /**
  * PUT /api/message-templates
  *

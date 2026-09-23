@@ -29,7 +29,9 @@ export function CustomerModal({ isOpen, customer, onClose, onSaved }: CustomerMo
       state: '',
       zip: '',
     },
-    propertyType: 'residential',
+    // Undefined, not 'residential'. A new customer whose type nobody has asked about
+    // must not be recorded as residential by default.
+    propertyType: undefined as 'residential' | 'commercial' | undefined,
     notes: '',
   });
 
@@ -51,7 +53,10 @@ export function CustomerModal({ isOpen, customer, onClose, onSaved }: CustomerMo
           state: customer.address?.state || '',
           zip: customer.address?.zip || '',
         },
-        propertyType: customer.propertyType || 'residential',
+        // NOT defaulted to 'residential'. Doing that silently asserted a property
+        // type for every customer whose type had never been recorded, the moment
+        // anyone opened this form to change an unrelated field.
+        propertyType: customer.propertyType,
         notes: customer.notes || '',
       });
     } else {
@@ -67,7 +72,7 @@ export function CustomerModal({ isOpen, customer, onClose, onSaved }: CustomerMo
           state: '',
           zip: '',
         },
-        propertyType: 'residential',
+        propertyType: undefined,
         notes: '',
       });
     }
@@ -241,31 +246,34 @@ export function CustomerModal({ isOpen, customer, onClose, onSaved }: CustomerMo
               <label className="block font-semibold text-slate-700 mb-1">
                 Property Type
               </label>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setFormData({ ...formData, propertyType: 'residential' })}
-                  className={`h-9 px-3 rounded-md border text-xs font-medium flex items-center justify-center gap-1.5 transition-colors ${
-                    formData.propertyType === 'residential'
-                      ? 'bg-slate-900 text-white border-slate-900'
-                      : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
-                  }`}
-                >
-                  <Building className="w-3 h-3" />
-                  Residential
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setFormData({ ...formData, propertyType: 'commercial' })}
-                  className={`h-9 px-3 rounded-md border text-xs font-medium flex items-center justify-center gap-1.5 transition-colors ${
-                    formData.propertyType === 'commercial'
-                      ? 'bg-slate-900 text-white border-slate-900'
-                      : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
-                  }`}
-                >
-                  <Building className="w-3 h-3" />
-                  Commercial
-                </button>
+              {/*
+                Three options, because "not recorded" is a real state. This control used
+                to offer only two and pre-select Residential, so editing a customer's
+                phone number silently asserted their property type — and the list, the
+                lead page and the drawer all then displayed it as fact.
+              */}
+              <div className="grid grid-cols-3 gap-2">
+                {(
+                  [
+                    [undefined, 'Not recorded'],
+                    ['residential', 'Residential'],
+                    ['commercial', 'Commercial'],
+                  ] as const
+                ).map(([value, label]) => (
+                  <button
+                    key={label}
+                    type="button"
+                    onClick={() => setFormData({ ...formData, propertyType: value })}
+                    className={`h-9 px-3 rounded-md border text-xs font-medium flex items-center justify-center gap-1.5 transition-colors ${
+                      formData.propertyType === value
+                        ? 'bg-slate-900 text-white border-slate-900'
+                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                    }`}
+                  >
+                    {value && <Building className="w-3 h-3" />}
+                    {label}
+                  </button>
+                ))}
               </div>
             </div>
           </div>

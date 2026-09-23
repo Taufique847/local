@@ -23,6 +23,8 @@ export class CustomerService {
       isOptedOut: Boolean(customer.isOptedOut),
       optedOutAt: customer.optedOutAt,
       propertyType: customer.propertyType,
+      // Access and property facts, previously trapped in free-text memory rows.
+      property: customer.property,
       status: customer.status,
       source: customer.source,
       createdAt: customer.createdAt,
@@ -53,6 +55,7 @@ export class CustomerService {
       status: input.status || 'active',
       source: input.source || 'manual',
       propertyType: input.propertyType,
+      property: input.property,
     });
 
     return this.toDTO(customer);
@@ -144,6 +147,25 @@ export class CustomerService {
     if (input.notes !== undefined) customer.notes = input.notes.trim();
     if (input.status !== undefined) customer.status = input.status;
     if (input.propertyType !== undefined) customer.propertyType = input.propertyType;
+
+    /**
+     * Merged, not replaced, and field by field.
+     *
+     * A form that posts only `gateCode` must not wipe the pet notes someone else
+     * recorded. An explicit empty string still clears a field, so a gate code that
+     * changed can be removed — `undefined` means "not in this request" and `''` means
+     * "delete it", and collapsing those two is how a partial update silently erases
+     * data.
+     */
+    if (input.property !== undefined) {
+      const merged = { ...((customer.property ?? {}) as Record<string, unknown>) };
+      for (const [key, value] of Object.entries(input.property)) {
+        if (value === undefined) continue;
+        if (value === '') delete merged[key];
+        else merged[key] = value;
+      }
+      customer.property = merged as any;
+    }
 
     await customer.save();
     return this.toDTO(customer);

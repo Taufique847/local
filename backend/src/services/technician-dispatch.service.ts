@@ -3,9 +3,16 @@ import { ServiceZone, IServiceZone } from '../models/service-zone.model';
 import { Technician, ITechnician } from '../models/technician.model';
 import { Appointment } from '../models/appointment.model';
 import { Customer } from '../models/customer.model';
+import { Equipment } from '../models/equipment.model';
 import { AgentMemoryService } from './agent-memory.service';
 import { CommunicationService } from './communication.service';
+import { EquipmentService } from './equipment.service';
+import { ICustomerProperty } from '../types/customer.types';
+import { formatDateTimeInZone } from '../utils/format';
+import { logger } from '../utils/logger';
 import { AppError } from '../types';
+
+const log = logger.child({ module: 'dispatch' });
 
 export class TechnicianDispatchService {
   /**
@@ -237,11 +244,16 @@ export class TechnicianDispatchService {
     businessId: Types.ObjectId | string,
     appointmentId: Types.ObjectId | string
   ): Promise<{
+    /** False when the alert could not be sent. The message is still returned. */
     success: boolean;
     dispatchMessage: string;
     mapsUrl: string;
     technicianName: string;
-    dispatchedToPhone: string;
+    /** Whether an SMS actually went to a technician. Never to the customer. */
+    technicianNotified: boolean;
+    dispatchedToPhone?: string;
+    /** Why nothing was sent, when `technicianNotified` is false. */
+    reason?: string;
   }> {
     const bId = new Types.ObjectId(businessId.toString());
     const appointment = await Appointment.findOne({ _id: appointmentId, businessId: bId })
@@ -257,64 +269,130 @@ export class TechnicianDispatchService {
     const customerPhone = customer ? customer.phone : 'Not provided';
     const address = appointment.address || 'Address on file';
 
-    // Fetch M19 customer memories for gate code / property notes
-    let gateCode = 'None';
-    let equipmentNote = 'Standard HVAC';
+    /**
+     * Access and equipment now come from structured fields.
+     *
+     * What this replaced: a loop over every `AgentMemory` row assigning
+     * `gateCode = mem.value` for any row in the `instruction` category. Categories
+     * hold more than gate codes, so a customer with a dog and no gate code had
+     * "Customer mentioned dogs/pets on the property; knock or call prior to entering
+     * yard" printed in the field labelled Access/Gate — and a customer with both got
+     * whichever row the loop happened to see last.
+     */
+    const property = (customer?.property ?? {}) as ICustomerProperty;
 
-    if (customer && customer._id) {
-      const memories = await AgentMemoryService.getMemoriesForCustomer(bId, customer._id);
-      for (const mem of memories) {
-        if (mem.category === 'instruction') gateCode = mem.value;
-        if (mem.category === 'equipment') equipmentNote = mem.value;
+    const accessLines: string[] = [];
+    if (property.gateCode) accessLines.push(`Code ${property.gateCode}`);
+    if (property.accessInstructions) accessLines.push(property.accessInstructions);
+    if (property.hasPets) accessLines.push(`PETS: ${property.petNotes || 'pets on site'}`);
+    if (property.parkingNotes) accessLines.push(`Parking: ${property.parkingNotes}`);
+
+    const accessNote = accessLines.length ? accessLines.join(' · ') : 'No access notes on file';
+
+    let equipmentNote = 'No equipment on file';
+    if (customer?._id) {
+      const units = await Equipment.find({
+        businessId: bId,
+        customerId: customer._id,
+        active: true,
+      }).sort({ isPrimary: -1, installYear: -1 });
+
+      if (units.length) {
+        equipmentNote = units.slice(0, 2).map((u) => EquipmentService.describe(u)).join(' | ');
       }
     }
 
     // Google Maps Turn-by-Turn Navigation URL
     const mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(address)}`;
 
-    // Resolve technician phone
-    let techPhone = customerPhone; // fallback
-    let techName = appointment.technicianName || 'Field Technician';
+    /**
+     * The assigned technician, by id first.
+     *
+     * `appointment.technicianId` is now actually written, so the name-regex lookup is
+     * only a fallback for records created before that. The regex is escaped: the name
+     * comes from the database, and a technician called "J. R. (Bob)" would otherwise
+     * throw or match the wrong person.
+     */
+    let techRecord = null;
 
-    const techRecord = await Technician.findOne({
-      businessId: bId,
-      name: new RegExp(techName, 'i'),
-      active: true,
-    });
-
-    if (techRecord && techRecord.phone) {
-      techPhone = techRecord.phone;
-      techName = techRecord.name;
+    if (appointment.technicianId) {
+      techRecord = await Technician.findOne({
+        _id: appointment.technicianId,
+        businessId: bId,
+        active: true,
+      });
     }
 
-    const timeFormatted = new Date(appointment.startAt).toLocaleTimeString('en-US', {
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true,
-    });
+    if (!techRecord && appointment.technicianName) {
+      techRecord = await Technician.findOne({
+        businessId: bId,
+        name: new RegExp(`^${escapeRegex(appointment.technicianName)}$`, 'i'),
+        active: true,
+      });
+    }
 
-    const dispatchMessage = `🚨 DISPATCH ALERT: ${appointment.title || 'HVAC Service'} at ${timeFormatted}.
+    const techName = techRecord?.name || appointment.technicianName || 'Field Technician';
+
+    const timeFormatted = formatDateTimeInZone(appointment.startAt, appointment.timezone);
+
+    const dispatchMessage = `DISPATCH: ${appointment.title || 'HVAC Service'} — ${timeFormatted}
 Customer: ${customerName} (${customerPhone})
 Address: ${address}
 Unit: ${equipmentNote}
-Access/Gate: ${gateCode}
+Access: ${accessNote}
 Navigate: ${mapsUrl}`;
 
-    // Send dispatch SMS to technician
+    /**
+     * Sent to the technician, or to nobody.
+     *
+     * `techPhone` used to default to the CUSTOMER's number, so an appointment with no
+     * matching technician record texted the homeowner a message beginning "DISPATCH
+     * ALERT" that contained their own gate code and their own phone number. Refusing
+     * is the only correct behaviour: the alert is internal, and there is no version of
+     * this that the customer should receive.
+     */
+    if (!techRecord?.phone) {
+      log.warn('dispatch_sms_skipped_no_technician_phone', {
+        businessId: String(bId),
+        appointmentId: String(appointment._id),
+        technicianName: techName,
+      });
+
+      return {
+        success: false,
+        dispatchMessage,
+        mapsUrl,
+        technicianName: techName,
+        technicianNotified: false,
+        reason:
+          'No phone number is on file for the assigned technician, so the dispatch alert was not sent. Assign a technician with a mobile number to send it.',
+      };
+    }
+
     await CommunicationService.sendMessage(bId, {
-      to: techPhone,
+      to: techRecord.phone,
       body: dispatchMessage,
       customerId: customer?._id?.toString(),
       type: 'custom',
       bypassQuietHours: true,
-    }).catch((e: any) => console.error('Error sending tech dispatch SMS:', e));
+    }).catch((e: any) =>
+      log.error('dispatch_sms_failed', {
+        businessId: String(bId),
+        appointmentId: String(appointment._id),
+        reason: e?.message,
+      })
+    );
 
     return {
       success: true,
       dispatchMessage,
       mapsUrl,
       technicianName: techName,
-      dispatchedToPhone: techPhone,
+      technicianNotified: true,
+      dispatchedToPhone: techRecord.phone,
     };
   }
 }
+
+/** The technician name comes from the database, so it is escaped before use in a regex. */
+const escapeRegex = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

@@ -11,6 +11,24 @@ export interface ICustomerAddress {
   zip?: string;
 }
 
+/**
+ * Structured access and property facts.
+ *
+ * Every one of these was previously free text inside an `AgentMemory` value, which
+ * is why the dispatch SMS could print "Customer mentioned dogs/pets on the
+ * property" in the field labelled "Access/Gate".
+ */
+export interface ICustomerProperty {
+  /** Physical access credential. Never sent on a customer-facing channel. */
+  gateCode?: string;
+  accessInstructions?: string;
+  /** Tri-state: `undefined` means nobody has asked, which is not "no pets". */
+  hasPets?: boolean;
+  petNotes?: string;
+  parkingNotes?: string;
+  propertyNotes?: string;
+}
+
 export interface ICustomer extends Document {
   _id: Types.ObjectId;
   businessId: Types.ObjectId;
@@ -45,6 +63,8 @@ export interface ICustomer extends Document {
    * `undefined` and fell back to showing "Residential" for every customer.
    */
   propertyType?: CustomerPropertyType;
+  /** Structured access and property facts. See ICustomerProperty. */
+  property?: ICustomerProperty;
   status: CustomerStatus;
   source: string;
   createdAt: Date;
@@ -71,6 +91,7 @@ export interface CustomerDTO {
   isOptedOut?: boolean;
   optedOutAt?: string | Date | null;
   propertyType?: CustomerPropertyType;
+  property?: ICustomerProperty;
   status: CustomerStatus;
   source: string;
   createdAt: string | Date;
@@ -90,6 +111,7 @@ export interface CustomerInput {
   status?: CustomerStatus;
   source?: string;
   propertyType?: CustomerPropertyType;
+  property?: ICustomerProperty;
 }
 
 export interface CustomerQueryInput {
