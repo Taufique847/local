@@ -84,6 +84,31 @@ export class AppointmentService {
     return json.appointment;
   }
 
+  /**
+   * Moves an appointment to a new start time.
+   *
+   * The duration is preserved server-side, so callers send only `startAt`. Everything
+   * that matters happens behind the per-business booking lock: the opening-hours check,
+   * the booking horizon, the per-technician conflict check and the `rescheduleHistory`
+   * entry. A drag on the calendar must go through here rather than `updateAppointment`,
+   * which would write the times and skip all of it.
+   *
+   * A 409 is the expected failure and carries a usable reason — "Dana is already booked
+   * for that time", "before you open on Sunday" — so callers should surface the message
+   * rather than a generic error.
+   */
+  public static async rescheduleAppointment(
+    id: string,
+    startAt: string,
+    reason?: string
+  ): Promise<Appointment> {
+    const json = await apiClient.post<{ appointment: Appointment }>(
+      `/api/appointments/${id}/reschedule`,
+      { startAt, reason }
+    );
+    return json.appointment;
+  }
+
   public static async updateStatus(
     id: string,
     status: AppointmentStatus,

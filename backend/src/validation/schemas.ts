@@ -480,6 +480,59 @@ export const appointmentStatusSchema = z.object({
 });
 
 /**
+ * POST /api/appointments/:id/reschedule
+ *
+ * This route had no schema either, and the note above about `PUT /:id` applied to it
+ * just as much. Two things it was letting through:
+ *
+ *  - **`endAt` earlier than `startAt`.** Nothing compared them, and the overlap query
+ *    for a backwards window matches nothing, so a negative-duration appointment saved
+ *    cleanly. It then has a `durationMs` that poisons every later reschedule, since the
+ *    duration is carried forward.
+ *  - **An unbounded `reason`**, which is appended to `rescheduleHistory` on every move
+ *    and so accumulates on the document forever.
+ *
+ * `changedBy` is deliberately absent: it comes from the authenticated user in the
+ * controller. Accepting it here would let a caller sign someone else's name to an
+ * entry in the audit trail.
+ */
+/**
+ * A required timestamp with one message covering both ways it can be wrong.
+ *
+ * Not `z.coerce.date({ message })`: coercion turns a missing value into an Invalid Date,
+ * which zod reports as `invalid_date`, and the constructor's message only reaches
+ * `invalid_type`. So an omitted field produced the literal string "Invalid date" — which
+ * is neither actionable nor something a form can put next to an input.
+ */
+const requiredTimestamp = (message: string) =>
+  z
+    .unknown()
+    /**
+     * `null` is singled out because `new Date(null)` is **1 January 1970**, not an
+     * invalid date — so it would pass the check below and silently move an appointment
+     * to the epoch. `undefined` and `''` need no special case: `new Date` already makes
+     * both invalid, and a second guard for them would be a clause nothing could reach.
+     */
+    .transform((value) => (value === null ? null : new Date(value as any)))
+    .refine((d): d is Date => d instanceof Date && !Number.isNaN(d.getTime()), { message });
+
+export const rescheduleAppointmentSchema = z
+  .object({
+    startAt: requiredTimestamp('A valid new start time is required to reschedule'),
+    endAt: z.coerce.date().optional(),
+    reason: trimmed(500).optional(),
+  })
+  .refine((data) => !data.endAt || data.endAt.getTime() > data.startAt.getTime(), {
+    message: 'The new end time must be after the new start time',
+    path: ['endAt'],
+  });
+
+/** POST /api/appointments/:id/cancel — also previously unvalidated. */
+export const cancelAppointmentSchema = z.object({
+  reason: trimmed(500).optional(),
+});
+
+/**
  * POST /api/reschedule-requests/:id/apply
  *
  * `startAt` is required and must parse. The owner is picking a new time for a

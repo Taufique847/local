@@ -145,11 +145,13 @@ export class AppointmentController {
     try {
       if (!req.user) throw new AppError('Authentication required', 401);
       const businessId = await AppointmentController.getBusinessId(req.user.id);
+      /**
+       * No manual `if (!startAt)` here. `rescheduleAppointmentSchema` requires it and
+       * reports it against the field, which a form can highlight; the hand-rolled check
+       * produced a sentence with nothing to attach it to, and two guards for one
+       * condition meant neither could be tested independently of the other.
+       */
       const { startAt, endAt, reason } = req.body;
-
-      if (!startAt) {
-        throw new AppError('New start time (startAt) is required to reschedule', 400);
-      }
 
       const appointment = await AppointmentService.rescheduleAppointment(businessId, req.params.id, {
         startAt,

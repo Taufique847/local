@@ -12,6 +12,7 @@ import {
   DEFAULT_TIMEZONE,
   formatTimeInZone,
   hourLabel,
+  instantForCell,
   monthGridOf,
   monthLabel,
   monthOf,
@@ -419,6 +420,128 @@ export default function AppointmentsPage() {
 
   const zoneLabel = zoneAbbreviation(timezone);
 
+  /**
+   * Drag-and-drop reschedule.
+   *
+   * Routed through `rescheduleAppointment`, never `updateAppointment`. That matters:
+   * the reschedule path is the one that holds the per-business booking lock and runs the
+   * opening-hours check, the booking horizon and the per-technician conflict check, and
+   * writes a `rescheduleHistory` entry. Writing `startAt` directly would move the job and
+   * skip all of it — including the double-booking guard.
+   *
+   * Optimistic, with rollback. A 409 is the *expected* outcome here, not an edge case: a
+   * drop onto a closed Sunday or onto the assigned technician's own job is refused, and
+   * the message says which. So the card moves immediately, and on failure it moves back
+   * and the server's own reason is shown rather than a generic error.
+   */
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
+  const [moveError, setMoveError] = useState<string | null>(null);
+  const [movingId, setMovingId] = useState<string | null>(null);
+
+  const idOf = (appt: Appointment): string => appt._id || (appt as any).id;
+
+  const moveAppointment = useCallback(
+    async (apptId: string, target: Date) => {
+      const previous = appointments;
+      const current = appointments.find((a) => idOf(a) === apptId);
+      if (!current) return;
+
+      // Nothing to do, and a no-op reschedule would still write a history entry.
+      if (new Date(current.startAt).getTime() === target.getTime()) return;
+
+      const durationMs = new Date(current.endAt).getTime() - new Date(current.startAt).getTime();
+
+      setMoveError(null);
+      setMovingId(apptId);
+      setAppointments((list) =>
+        list.map((a) =>
+          idOf(a) === apptId
+            ? {
+                ...a,
+                startAt: target.toISOString(),
+                endAt: new Date(target.getTime() + durationMs).toISOString(),
+              }
+            : a
+        )
+      );
+
+      try {
+        const saved = await AppointmentService.rescheduleAppointment(
+          apptId,
+          target.toISOString(),
+          'Moved on the dispatch calendar'
+        );
+        // The server owns the result — it may have adjusted status to 'rescheduled'.
+        setAppointments((list) => list.map((a) => (idOf(a) === apptId ? saved : a)));
+      } catch (err: any) {
+        setAppointments(previous);
+        setMoveError(err?.message || 'That move was refused. The appointment has not been changed.');
+      } finally {
+        setMovingId(null);
+      }
+    },
+    [appointments]
+  );
+
+  /** A drop onto an hour row in the day view: same date, new hour, minutes zeroed. */
+  const dropOnHour = (hour: number) => {
+    if (!dragId) return;
+    const target = instantForCell(selectedDate, hour * 60, timezone);
+    if (target) void moveAppointment(dragId, target);
+    setDragId(null);
+    setDropTarget(null);
+  };
+
+  /**
+   * A drop onto a day cell in the week or month view: new date, **same time of day**.
+   *
+   * Preserving the time is the useful behaviour — moving Tuesday's 9am job to Thursday
+   * means Thursday at 9am, not Thursday at midnight. Read in the business timezone, so
+   * the time the dispatcher sees on the card is the time it keeps.
+   */
+  const dropOnDay = (dayKey: string) => {
+    if (!dragId) return;
+    const current = appointments.find((a) => idOf(a) === dragId);
+    const minutes = current ? (zonedParts(current.startAt, timezone)?.minutesOfDay ?? 0) : 0;
+    const target = instantForCell(dayKey, minutes, timezone);
+    if (target) void moveAppointment(dragId, target);
+    setDragId(null);
+    setDropTarget(null);
+  };
+
+  /** Shared props for anything draggable. */
+  const dragProps = (appt: Appointment) => ({
+    draggable: true,
+    onDragStart: (e: React.DragEvent) => {
+      setDragId(idOf(appt));
+      // Required for Firefox to start a drag at all.
+      e.dataTransfer.setData('text/plain', idOf(appt));
+      e.dataTransfer.effectAllowed = 'move';
+    },
+    onDragEnd: () => {
+      setDragId(null);
+      setDropTarget(null);
+    },
+  });
+
+  /** Shared props for a drop zone. `preventDefault` on dragOver is what permits a drop. */
+  const dropProps = (key: string, onDrop: () => void) => ({
+    onDragOver: (e: React.DragEvent) => {
+      if (!dragId) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      if (dropTarget !== key) setDropTarget(key);
+    },
+    onDragLeave: () => {
+      if (dropTarget === key) setDropTarget(null);
+    },
+    onDrop: (e: React.DragEvent) => {
+      e.preventDefault();
+      onDrop();
+    },
+  });
+
   return (
     <DashboardShell>
       <div className="space-y-4">
@@ -643,6 +766,34 @@ export default function AppointmentsPage() {
           </Card>
         </div>
 
+        {/*
+          A refused move.
+
+          The server's own reason, verbatim — "Dana Reyes is already booked for that
+          time", "That start time is before you open on Sunday". A generic "failed to
+          update" would leave the dispatcher with no idea what to try instead, and these
+          refusals are the normal case rather than an error condition.
+        */}
+        {moveError && (
+          <div
+            role="status"
+            className="bg-amber-50 border border-amber-200 rounded-2xl p-3.5 flex items-start gap-3 text-amber-900 shadow-xs"
+          >
+            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-amber-600" />
+            <div className="flex-1 text-xs font-medium leading-relaxed">
+              <span className="font-bold">Move refused. </span>
+              {moveError}
+            </div>
+            <button
+              type="button"
+              onClick={() => setMoveError(null)}
+              className="text-[11px] font-bold text-amber-700 hover:text-amber-900 shrink-0"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+
         {/* Double-Booking Conflict Alert Banner */}
         {conflicts.length > 0 && (
           <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 flex items-start gap-3.5 text-rose-900 animate-in fade-in shadow-xs">
@@ -815,7 +966,9 @@ export default function AppointmentsPage() {
                   ) : null}
                 </h2>
                 <p className="text-xs text-slate-500">
-                  Visual field timeline with one-click dispatch confirmation and technician status controls.
+                  Drag a booking onto another hour to reschedule it. Opening hours, the
+                  booking horizon and the assigned technician&apos;s own diary are all
+                  re-checked, so a refused move tells you why.
                 </p>
               </div>
               <Badge className="bg-slate-100 text-slate-700 border-slate-200 text-xs font-bold px-2.5 py-0.5">
@@ -840,10 +993,17 @@ export default function AppointmentsPage() {
                   (apt) => zonedParts(apt.startAt, timezone)?.hour === hour
                 );
 
+                const dropKey = `hour-${hour}`;
+
                 return (
                   <div
                     key={hour}
-                    className="grid grid-cols-12 gap-3 py-1.5 border-b border-slate-100 items-start min-h-[58px]"
+                    {...dropProps(dropKey, () => dropOnHour(hour))}
+                    className={`grid grid-cols-12 gap-3 py-1.5 border-b items-start min-h-[58px] rounded-lg transition-colors ${
+                      dropTarget === dropKey
+                        ? 'border-blue-300 bg-blue-50/60'
+                        : 'border-slate-100'
+                    }`}
                   >
                     {/* Hour Column */}
                     <div className="col-span-2 sm:col-span-1 pt-1.5">
@@ -864,7 +1024,14 @@ export default function AppointmentsPage() {
                           return (
                             <div
                               key={id}
-                              className="p-3.5 rounded-xl bg-slate-50/70 hover:bg-slate-50 border border-slate-200/90 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs hover:border-slate-300"
+                              {...dragProps(apt)}
+                              className={`p-3.5 rounded-xl border transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs cursor-grab active:cursor-grabbing ${
+                                movingId === id
+                                  ? 'bg-blue-50/70 border-blue-200 opacity-70'
+                                  : dragId === id
+                                    ? 'bg-slate-50 border-blue-300 opacity-50'
+                                    : 'bg-slate-50/70 hover:bg-slate-50 border-slate-200/90 hover:border-slate-300'
+                              }`}
                             >
                               <div className="flex items-start gap-3">
                                 <div className="p-2 rounded-lg bg-blue-50 text-blue-600 border border-blue-100 shrink-0 mt-0.5">
@@ -998,7 +1165,8 @@ export default function AppointmentsPage() {
                   ) : null}
                 </h2>
                 <p className="text-xs text-slate-500">
-                  Seven days at a glance. Click a day to open its hourly timeline.
+                  Seven days at a glance. Click a day for its hourly timeline, or drag a
+                  booking onto another day &mdash; it keeps its time.
                 </p>
               </div>
               <Badge className="bg-slate-100 text-slate-700 border-slate-200 text-xs font-bold px-2.5 py-0.5">
@@ -1021,15 +1189,20 @@ export default function AppointmentsPage() {
                 );
                 const closed = dayHours ? !dayHours.isOpen : false;
 
+                const dropKey = `week-${dayKey}`;
+
                 return (
                   <div
                     key={dayKey}
-                    className={`rounded-xl border p-2.5 space-y-2 min-h-[140px] ${
-                      isToday
-                        ? 'border-blue-300 bg-blue-50/40'
-                        : closed
-                          ? 'border-slate-200 bg-slate-50/80'
-                          : 'border-slate-200 bg-white'
+                    {...dropProps(dropKey, () => dropOnDay(dayKey))}
+                    className={`rounded-xl border p-2.5 space-y-2 min-h-[140px] transition-colors ${
+                      dropTarget === dropKey
+                        ? 'border-blue-400 bg-blue-50/70'
+                        : isToday
+                          ? 'border-blue-300 bg-blue-50/40'
+                          : closed
+                            ? 'border-slate-200 bg-slate-50/80'
+                            : 'border-slate-200 bg-white'
                     }`}
                   >
                     <button
@@ -1068,7 +1241,14 @@ export default function AppointmentsPage() {
                           <Link
                             key={id}
                             href={`/app/appointments/${id}`}
-                            className="block rounded-lg border border-slate-200 bg-white px-2 py-1.5 hover:border-blue-300 hover:bg-blue-50/40 transition-colors"
+                            {...dragProps(apt)}
+                            className={`block rounded-lg border px-2 py-1.5 transition-colors cursor-grab active:cursor-grabbing ${
+                              movingId === id
+                                ? 'border-blue-200 bg-blue-50/70 opacity-70'
+                                : dragId === id
+                                  ? 'border-blue-300 bg-white opacity-50'
+                                  : 'border-slate-200 bg-white hover:border-blue-300 hover:bg-blue-50/40'
+                            }`}
                           >
                             <div className="flex items-center gap-1.5">
                               <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${statusConf.dot}`} />
@@ -1108,7 +1288,8 @@ export default function AppointmentsPage() {
                   ) : null}
                 </h2>
                 <p className="text-xs text-slate-500">
-                  Workload by day. Click a day to open its hourly timeline.
+                  Workload by day. Click a day for its hourly timeline, or drag a booking
+                  onto another day &mdash; it keeps its time.
                 </p>
               </div>
               <Badge className="bg-slate-100 text-slate-700 border-slate-200 text-xs font-bold px-2.5 py-0.5">
@@ -1133,20 +1314,25 @@ export default function AppointmentsPage() {
                 // grid stays rectangular and a job on the 1st is still reachable.
                 const inMonth = monthOf(dayKey) === monthOf(selectedDate);
 
+                const dropKey = `month-${dayKey}`;
+
                 return (
                   <button
                     key={dayKey}
                     type="button"
+                    {...dropProps(dropKey, () => dropOnDay(dayKey))}
                     onClick={() => {
                       setSelectedDate(dayKey);
                       setViewMode('calendar');
                     }}
                     className={`text-left rounded-lg border p-1.5 min-h-[78px] transition-colors ${
-                      isToday
-                        ? 'border-blue-300 bg-blue-50/50'
-                        : inMonth
-                          ? 'border-slate-200 bg-white hover:border-blue-300 hover:bg-blue-50/30'
-                          : 'border-slate-100 bg-slate-50/60 hover:border-slate-200'
+                      dropTarget === dropKey
+                        ? 'border-blue-400 bg-blue-50/70'
+                        : isToday
+                          ? 'border-blue-300 bg-blue-50/50'
+                          : inMonth
+                            ? 'border-slate-200 bg-white hover:border-blue-300 hover:bg-blue-50/30'
+                            : 'border-slate-100 bg-slate-50/60 hover:border-slate-200'
                     }`}
                   >
                     <span
@@ -1172,7 +1358,10 @@ export default function AppointmentsPage() {
                         return (
                           <span
                             key={apt._id || (apt as any).id}
-                            className="flex items-center gap-1 text-[10px] text-slate-600 font-medium truncate"
+                            {...dragProps(apt)}
+                            className={`flex items-center gap-1 text-[10px] font-medium truncate cursor-grab active:cursor-grabbing ${
+                              dragId === idOf(apt) ? 'text-slate-400' : 'text-slate-600'
+                            }`}
                           >
                             <span className={`w-1 h-1 rounded-full shrink-0 ${statusConf.dot}`} />
                             <span className="tabular-nums shrink-0">{formatTime(apt.startAt)}</span>

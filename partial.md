@@ -136,7 +136,7 @@ Subtotal: **22.5 days** of feature work.
 - **#41** — the "6 literals in a switch" is now one templates module covering both channels, and `renderTemplate` still does not receive a `businessId`. The per-business override model and editor are untouched, so the 2-day estimate stands.
 - **Days 14–15 (#42)** — done. The duplicated arithmetic is one `PricingService`; travel fees, discounts and the never-billed `emergencyFee` all work. One line of that row's "missing" column is deliberately **not** closed: *"tax is one flat blended rate; customer state/zip never consulted"*. A per-jurisdiction tax table is a different feature from a pricing engine, and guessing a rate from a ZIP is worse than using the rate the business entered. It is recorded in the Day 24 close-out instead.
 
-**~7 days remain** of the original 24: Day 1 (defects), Days 2–13, Day 13½, Days 14–15 and Days 16–17 are done, leaving Days 18–24 — drag-and-drop and recurrence (#14), real dispatch (#18) and close-out.
+**~6 days remain** of the original 24: Day 1 (defects), Days 2–13, Day 13½, Days 14–15 and Days 16–18 are done, leaving Days 19–24 — recurrence (#14), real dispatch (#18) and close-out.
 
 Of the nine partial features, **seven are now complete**: #38, #39, #41, #10, #13 and #42, plus #18's `technicianId` prerequisite from Day 0. The two genuinely outstanding are the calendar (#14) and dispatch (#18), which is exactly the 15-day cut described below — and the reason it was the recommended one.
 
@@ -360,8 +360,33 @@ Both ends are now half-open on the local day, with a test at each boundary — t
 #### Remaining
 
 - **Technician lanes** in the day view are not built. Deliberately deferred: they are the one part of Day 17 that is presentation rather than correctness, and Day 20's technician picker is what makes them worth having — most jobs are still unassigned.
-- **Day 18** — Drag-and-drop to reschedule, routed through `rescheduleAppointment` so the lock, conflict re-check and `rescheduleHistory` all still apply. Optimistic UI with rollback on a 409. Note `rescheduleAppointment` currently re-checks slot overlap but **not** business hours — add that, or a drag onto a closed Sunday will succeed.
+#### Day 18 · drag-and-drop reschedule — ✅ **done**
+
+11 more tests (79 in the scheduling file); **23 mutations attempted, 23 caught** across three passes.
+
+Routed through `rescheduleAppointment`, never `updateAppointment`. That is the whole point: the reschedule path is the one that holds the per-business booking lock and runs opening hours, the booking horizon and the per-technician conflict check, and writes a `rescheduleHistory` entry. Writing `startAt` directly would move the job and skip the double-booking guard entirely.
+
+**Optimistic with rollback**, because a refusal is the *normal* case here rather than an error condition — a drop onto a closed Sunday or onto the assigned technician's own job is supposed to fail. The card moves immediately; on failure it moves back and the server's own reason is shown verbatim. "Dana Reyes is already booked for that time" tells a dispatcher what to do next; "failed to update" does not.
+
+Dropping onto an hour row in the day view sets that hour. Dropping onto a day cell in the week or month view **keeps the time of day** — moving Tuesday's 9am job to Thursday means Thursday at 9am, not Thursday at midnight — read in the business timezone via a frontend `zonedWallClockToUtc` that mirrors the backend's.
+
+**Defects fixed, all pre-existing**
+
+- **`POST /:id/reschedule` and `/:id/cancel` had no validation schema at all.** The route file's own comment recorded that `PUT /:id` had been fixed for exactly this reason; these two had not. Two things were getting through:
+  - **`endAt` earlier than `startAt`.** Nothing compared them, and the overlap query for a backwards window matches nothing, so a negative-duration appointment saved cleanly — and then poisoned every later reschedule, because the duration is carried forward.
+  - **An unbounded `reason`**, appended to `rescheduleHistory` on every move.
+- **`null` as a start time booked the epoch.** `new Date(null)` is 1 January 1970, a perfectly valid date, so it passed every check that follows: the horizon only looks forward, minimum notice is not enforced on this path, and an all-hours business accepts the hour. The job moved to 1970 and disappeared from the calendar. `undefined` and `''` need no such guard — `new Date` already makes both invalid, and guarding them too would be a clause nothing could reach.
+- **The controller's hand-rolled `if (!startAt)` is gone.** Two guards for one condition, and the duplicate made the schema's own requirement impossible to test independently. The schema now reports it against the field, which a form can highlight.
+
+**What the mutation pass found, which is the more useful output**
+
+- **A real hole in my own tenancy test.** Removing `businessId` from the reschedule lookup still produced a 404 — because `rescheduleAppointmentUnlocked` ends with `getAppointmentById`, which *is* scoped — but only *after* writing the move. Asserting the status code was not enough; the test now asserts the document is untouched.
+- **`changedBy` is defended twice, and neither layer is individually testable.** The schema does not list it, so `validateBody` strips it; the controller reads `req.user.email` regardless. Mutating either alone is harmless, so the harness gained the ability to apply two edits at once — and the paired mutation *is* caught, which is what makes the defence verified rather than assumed.
+- **The cancel schema looked redundant**: `Appointment.cancellationReason` already carries `maxlength: 500`, so Mongoose refuses an over-long reason either way. It refuses it as `cancellationReason` though — the internal column, after a database round trip — while the request field is `reason`, and a form cannot highlight an input it has no name for. The test now asserts which field is named, which is the observable difference.
+
+#### Remaining
 - **Day 19** — Recurring appointments: `recurrenceRule` + `recurrenceParentId`, generation horizon, and edit-one-vs-edit-series. Deliberately last in this group — it is the piece a maintenance-plan feature later depends on, and the easiest to defer.
+- **Technician lanes** in the day view. Deferred from Day 17: presentation rather than correctness, and worth having once Day 20's picker means jobs are routinely assigned.
 
 ### Days 20–23 · Feature 18: real dispatch
 - **Day 20** — Assignment as a first-class action. A technician picker in the booking modal and on the appointment detail page, writing `technicianId`. Call `findOptimalTechnician` at booking time to *suggest* (not silently impose) an assignment, and persist the result — today it returns a suggestion to nobody. Filter by `status` and skills, which the current matcher ignores.

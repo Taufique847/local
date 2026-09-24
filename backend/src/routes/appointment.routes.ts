@@ -6,6 +6,8 @@ import {
   createAppointmentSchema,
   updateAppointmentSchema,
   appointmentStatusSchema,
+  rescheduleAppointmentSchema,
+  cancelAppointmentSchema,
 } from '../validation/schemas';
 
 const router = Router();
@@ -22,8 +24,19 @@ router.post(
   validateBody(createAppointmentSchema),
   AppointmentController.createAppointment as any
 );
-router.post('/:id/reschedule', AppointmentController.rescheduleAppointment as any);
-router.post('/:id/cancel', AppointmentController.cancelAppointment as any);
+// Also previously unvalidated, which mattered once calendar drag-and-drop became a
+// caller: a backwards `endAt` saved a negative-duration appointment, and the duration is
+// carried forward by every later reschedule.
+router.post(
+  '/:id/reschedule',
+  validateBody(rescheduleAppointmentSchema),
+  AppointmentController.rescheduleAppointment as any
+);
+router.post(
+  '/:id/cancel',
+  validateBody(cancelAppointmentSchema),
+  AppointmentController.cancelAppointment as any
+);
 // Previously unvalidated: it accepted any body. `technicianId` in particular must
 // be a well-formed id before it reaches a tenant-scoped lookup.
 router.put(

@@ -12,11 +12,13 @@ import {
   zonedDayBounds,
   zonedDateKey,
 } from '../../src/utils/format';
+import { asUser } from '../helpers/agent';
 import {
   createCustomerRecord,
   createServiceRecord,
   createTechnicianRecord,
   createWorkspace,
+  type Workspace,
 } from '../helpers/factories';
 
 /**
@@ -1453,5 +1455,213 @@ describe('the calendar range endpoint', () => {
     await expect(
       AppointmentService.getCalendarAppointments(shop.businessId, 'last-tuesday', 'soon')
     ).rejects.toThrow(/YYYY-MM-DD/);
+  });
+});
+
+describe('the reschedule route validates its body', () => {
+  /**
+   * Day 18: calendar drag-and-drop routes here, so this stopped being a
+   * dashboard-only endpoint. It had no schema at all — the route file's own comment
+   * noted that `PUT /:id` had been fixed for exactly this reason and this one had not.
+   */
+  const seedJob = async (shop: Workspace) => {
+    const [service, customer] = await Promise.all([
+      createServiceRecord(shop.businessId),
+      createCustomerRecord(shop.businessId),
+    ]);
+
+    const startAt = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000);
+    startAt.setUTCHours(12, 0, 0, 0);
+
+    return Appointment.create({
+      businessId: shop.businessId,
+      customerId: customer._id,
+      serviceId: service._id,
+      startAt,
+      endAt: new Date(startAt.getTime() + 90 * 60 * 1000),
+      status: 'scheduled',
+      timezone: 'UTC',
+      address: '1 Test St',
+    });
+  };
+
+  const laterThat = (job: any, minutes: number) =>
+    new Date(job.startAt.getTime() + minutes * 60 * 1000).toISOString();
+
+  it('refuses an endAt earlier than the new startAt', async () => {
+    /**
+     * Nothing compared them, and the overlap query for a backwards window matches
+     * nothing, so a negative-duration appointment saved cleanly. It then poisons every
+     * later reschedule, because the duration is carried forward.
+     */
+    const shop = await createWorkspace();
+    const job = await seedJob(shop);
+
+    const res = await asUser(shop.ownerToken)
+      .post(`/api/appointments/${job._id}/reschedule`)
+      .send({ startAt: laterThat(job, 120), endAt: laterThat(job, 60) });
+
+    expect(res.status).toBe(400);
+    // Per-field, so the UI can highlight the offending input rather than dumping a
+    // sentence over the whole form.
+    expect(res.body.fields?.endAt).toMatch(/end time must be after/i);
+
+    const unchanged = await Appointment.findById(job._id);
+    expect(unchanged!.startAt.getTime()).toBe(job.startAt.getTime());
+  });
+
+  it('refuses an endAt equal to the new startAt', async () => {
+    // A zero-length appointment is not a job anyone can be dispatched to.
+    const shop = await createWorkspace();
+    const job = await seedJob(shop);
+
+    const res = await asUser(shop.ownerToken)
+      .post(`/api/appointments/${job._id}/reschedule`)
+      .send({ startAt: laterThat(job, 60), endAt: laterThat(job, 60) });
+
+    expect(res.status).toBe(400);
+  });
+
+  it('refuses an unparseable start time', async () => {
+    const shop = await createWorkspace();
+    const job = await seedJob(shop);
+
+    const res = await asUser(shop.ownerToken)
+      .post(`/api/appointments/${job._id}/reschedule`)
+      .send({ startAt: 'next tuesday-ish' });
+
+    expect(res.status).toBe(400);
+    // The same message as an omitted value: from the caller's side they are one problem.
+    expect(res.body.fields?.startAt).toMatch(/valid new start time is required/i);
+  });
+
+  it('refuses a null start time rather than booking the epoch', async () => {
+    /**
+     * `new Date(null)` is 1 January 1970 — a perfectly valid date. Without a guard for
+     * `null` specifically it passes every check that follows: the horizon only looks
+     * forward, minimum notice is not enforced on this path, and a fixture open around the
+     * clock accepts the hour. The job silently moves to 1970 and vanishes from the
+     * calendar.
+     */
+    const shop = await createWorkspace();
+    const job = await seedJob(shop);
+
+    const res = await asUser(shop.ownerToken)
+      .post(`/api/appointments/${job._id}/reschedule`)
+      .send({ startAt: null });
+
+    expect(res.status).toBe(400);
+
+    const unchanged = await Appointment.findById(job._id);
+    expect(unchanged!.startAt.getTime()).toBe(job.startAt.getTime());
+  });
+
+  it('refuses a missing start time, as a field error', async () => {
+    // The controller used to carry its own `if (!startAt)` guard as well. Two checks for
+    // one condition, and the duplicate made the schema's own requirement untestable.
+    const shop = await createWorkspace();
+    const job = await seedJob(shop);
+
+    const res = await asUser(shop.ownerToken)
+      .post(`/api/appointments/${job._id}/reschedule`)
+      .send({});
+
+    expect(res.status).toBe(400);
+    expect(res.body.fields?.startAt).toMatch(/valid new start time is required/i);
+  });
+
+  it('refuses a reason longer than the field allows', async () => {
+    // Appended to `rescheduleHistory` on every move, so unbounded means it accumulates.
+    const shop = await createWorkspace();
+    const job = await seedJob(shop);
+
+    const res = await asUser(shop.ownerToken)
+      .post(`/api/appointments/${job._id}/reschedule`)
+      .send({ startAt: laterThat(job, 60), reason: 'x'.repeat(501) });
+
+    expect(res.status).toBe(400);
+  });
+
+  it('accepts a plain move and records who made it', async () => {
+    const shop = await createWorkspace();
+    const job = await seedJob(shop);
+    const target = laterThat(job, 60);
+
+    const res = await asUser(shop.ownerToken)
+      .post(`/api/appointments/${job._id}/reschedule`)
+      .send({ startAt: target, reason: 'Moved on the dispatch calendar' });
+
+    expect(res.status).toBe(200);
+
+    const moved = await Appointment.findById(job._id);
+    expect(moved!.startAt.toISOString()).toBe(target);
+    // Duration preserved, which is what lets a drag send only `startAt`.
+    expect(moved!.endAt.getTime() - moved!.startAt.getTime()).toBe(90 * 60 * 1000);
+
+    const entry = moved!.rescheduleHistory.at(-1)!;
+    expect(entry.reason).toBe('Moved on the dispatch calendar');
+    /**
+     * `changedBy` comes from the authenticated user, not the body — a caller must not be
+     * able to sign someone else's name to an entry in the audit trail. The schema
+     * deliberately does not accept the field.
+     */
+    expect(entry.changedBy).toBe(shop.owner.email);
+  });
+
+  it('ignores a changedBy supplied in the body', async () => {
+    const shop = await createWorkspace();
+    const job = await seedJob(shop);
+
+    const res = await asUser(shop.ownerToken)
+      .post(`/api/appointments/${job._id}/reschedule`)
+      .send({ startAt: laterThat(job, 60), changedBy: 'someone.else@example.com' });
+
+    expect(res.status).toBe(200);
+
+    const moved = await Appointment.findById(job._id);
+    expect(moved!.rescheduleHistory.at(-1)!.changedBy).toBe(shop.owner.email);
+  });
+
+  it('refuses a cancel reason longer than the field allows, naming the field sent', async () => {
+    /**
+     * `Appointment.cancellationReason` already carries `maxlength: 500`, so Mongoose
+     * would refuse this either way — but it refuses it as `cancellationReason`, the
+     * internal column, after a database round trip. The request field is `reason`, and a
+     * form cannot highlight an input it has no name for. Asserting the field key is what
+     * makes the schema's presence observable rather than decorative.
+     */
+    const shop = await createWorkspace();
+    const job = await seedJob(shop);
+
+    const res = await asUser(shop.ownerToken)
+      .post(`/api/appointments/${job._id}/cancel`)
+      .send({ reason: 'y'.repeat(501) });
+
+    expect(res.status).toBe(400);
+    expect(res.body.fields?.reason).toBeTruthy();
+    expect(res.body.fields?.cancellationReason).toBeUndefined();
+  });
+
+  it('will not reschedule another business’s appointment, and does not move it', async () => {
+    /**
+     * The status code alone is not enough here, and asserting only that was a real hole
+     * in this test: `rescheduleAppointmentUnlocked` ends with `getAppointmentById`, which
+     * *is* tenant-scoped, so removing the scope from the first lookup still produced a
+     * 404 — after having written the move. The document has to be checked.
+     */
+    const alpha = await createWorkspace();
+    const beta = await createWorkspace();
+    const theirs = await seedJob(beta);
+
+    const res = await asUser(alpha.ownerToken)
+      .post(`/api/appointments/${theirs._id}/reschedule`)
+      .send({ startAt: laterThat(theirs, 60) });
+
+    expect(res.status).toBe(404);
+
+    const untouched = await Appointment.findById(theirs._id);
+    expect(untouched!.startAt.getTime()).toBe(theirs.startAt.getTime());
+    expect(untouched!.rescheduleHistory).toHaveLength(0);
+    expect(untouched!.status).toBe('scheduled');
   });
 });

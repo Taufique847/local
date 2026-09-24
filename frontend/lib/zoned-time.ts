@@ -235,3 +235,70 @@ export const shiftMonthKey = (key: string, months: number): string => {
     Math.min(d, daysInTarget)
   ).padStart(2, '0')}`;
 };
+
+/**
+ * The offset of a timezone at an instant, in milliseconds.
+ *
+ * Derived rather than tabulated: format the instant in the zone, rebuild those parts as
+ * if they were UTC, subtract. Whatever ICU says the local clock read is what we get,
+ * including DST.
+ */
+const zoneOffsetMs = (instant: Date, timezone: string): number => {
+  const p = zonedParts(instant, timezone);
+  if (!p) return 0;
+  const asUtc = Date.UTC(
+    p.year,
+    p.month - 1,
+    p.day,
+    p.hour,
+    p.minute,
+    instant.getUTCSeconds(),
+    instant.getUTCMilliseconds()
+  );
+  return asUtc - instant.getTime();
+};
+
+/**
+ * A local wall-clock time in some zone → a UTC instant. Mirrors
+ * `zonedWallClockToUtc` in `backend/src/utils/format.ts`.
+ *
+ * Needed the moment the calendar became draggable: a drop lands on a grid cell, which
+ * is a *local* date and hour, and the API takes an instant. Doing that conversion with
+ * `new Date(...)` would build it in the viewer's zone, so an owner in one state dragging
+ * a job on a board in another would move it by the difference between them.
+ *
+ * Two candidates, each verified by reading it back, for the same reason the backend does
+ * it that way: correcting the first guess with the second's offset oscillates across a
+ * spring-forward gap. A local time that does not exist resolves to the instant the clock
+ * actually reached; one that happens twice resolves to the earlier.
+ */
+export const zonedWallClockToUtc = (
+  year: number,
+  /** 1–12. */
+  month: number,
+  day: number,
+  minutesOfDay: number,
+  timezone: string = DEFAULT_TIMEZONE
+): Date => {
+  const naive = Date.UTC(year, month - 1, day, 0, 0, 0, 0) + minutesOfDay * 60_000;
+  const reads = (instant: number) => instant + zoneOffsetMs(new Date(instant), timezone) === naive;
+
+  const first = naive - zoneOffsetMs(new Date(naive), timezone);
+  if (reads(first)) return new Date(first);
+
+  const second = naive - zoneOffsetMs(new Date(first), timezone);
+  if (reads(second)) return new Date(second);
+
+  return new Date(Math.max(first, second));
+};
+
+/** The instant for a `YYYY-MM-DD` cell plus minutes since local midnight. */
+export const instantForCell = (
+  dateKey: string,
+  minutesOfDay: number,
+  timezone: string = DEFAULT_TIMEZONE
+): Date | null => {
+  const [y, m, d] = dateKey.split('-').map(Number);
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return null;
+  return zonedWallClockToUtc(y, m, d, minutesOfDay, timezone);
+};
