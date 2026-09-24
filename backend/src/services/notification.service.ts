@@ -27,6 +27,7 @@ import {
   formatAddress,
   formatMoney,
 } from '../utils/format';
+import { unsubscribeUrl } from '../utils/unsubscribe-token';
 
 const log = logger.child({ module: 'notification' });
 
@@ -525,7 +526,55 @@ export class NotificationService {
       return { channel: 'email', status: 'skipped', reason: 'no_template_for_channel' };
     }
 
+
+    /**
+     * Marketing email is suppressed for anyone who unsubscribed. Transactional is not.
+     *
+     * `options.marketing` is set only by the campaign sender. Every other caller here is
+     * transactional — a confirmation, a reminder, an invoice, a receipt — and those are
+     * exempt from CAN-SPAM's opt-out requirement because the customer asked for the
+     * underlying thing. Withholding somebody's invoice because they unsubscribed from
+     * promotions would be the wrong reading of a narrower request.
+     *
+     * The campaign audience query already excludes these customers, so reaching this is
+     * either a direct caller or a customer who unsubscribed between the audience being
+     * counted and this message being sent. Both are worth catching here.
+     */
+    if (options.marketing && recipient.customerId) {
+      const consent = await Customer.findOne({ _id: recipient.customerId, businessId })
+        .select('emailOptedOut')
+        .lean();
+
+      if (consent?.emailOptedOut) {
+        return { channel: 'email', status: 'skipped', reason: 'email_unsubscribed' };
+      }
+    }
+
     const fromAddress = config.emailFromAddress || 'not-configured@localhost';
+
+    /**
+     * Campaign mail carries an unsubscribe link in the body and in the headers.
+     *
+     * Both, not either. The footer link is what satisfies CAN-SPAM; the
+     * `List-Unsubscribe` headers are what make Gmail and Outlook render a native
+     * unsubscribe button, and a recipient who cannot find the link marks the message as
+     * spam instead — which costs the sending domain far more than the lost contact.
+     *
+     * `List-Unsubscribe-Post` opts into RFC 8058 one-click, which is why the endpoint
+     * behind it accepts POST and does not act on a bare GET: mail scanners prefetch
+     * links, and a GET that unsubscribed would opt people out without them touching it.
+     */
+    let bodyText = text;
+    let unsubscribeHeaders: Record<string, string> | undefined;
+
+    if (options.marketing && recipient.customerId) {
+      const link = unsubscribeUrl(recipient.customerId, String(businessId));
+      bodyText = `${text}\n\n---\nDon't want these emails? Unsubscribe: ${link}`;
+      unsubscribeHeaders = {
+        'List-Unsubscribe': `<${link}>`,
+        'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+      };
+    }
 
     /**
      * Logged before the attempt, in the same `queued` state as SMS, so a crash
@@ -543,7 +592,9 @@ export class NotificationService {
       from: fromAddress,
       to: recipient.email,
       subject: subject.slice(0, 200),
-      body: text.slice(0, CHANNEL_BODY_LIMIT.email),
+      // The body as actually sent, unsubscribe line included — the log has to match
+      // what the customer received, not what was rendered before it was appended.
+      body: bodyText.slice(0, CHANNEL_BODY_LIMIT.email),
       status: 'queued',
     });
 
@@ -563,7 +614,13 @@ export class NotificationService {
      */
 
     try {
-      const res = await EmailService.send({ to: recipient.email, subject, text, html });
+      const res = await EmailService.send({
+        to: recipient.email,
+        subject,
+        text: bodyText,
+        html,
+        headers: unsubscribeHeaders,
+      });
       entry.status = 'sent';
       if (res.id) entry.providerMessageId = res.id;
       await entry.save();

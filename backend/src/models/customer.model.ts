@@ -132,6 +132,29 @@ const customerSchema = new Schema<ICustomer>(
       default: null,
     },
     /**
+     * Marketing **email** consent. Entirely separate from `isOptedOut` above.
+     *
+     * These are two different consents under two different laws and conflating them
+     * breaks the product in both directions. `isOptedOut` is TCPA and is set by an SMS
+     * `STOP`; a customer who stops texts still needs their own invoice by email. This
+     * flag is CAN-SPAM and is set by clicking unsubscribe in a campaign email.
+     *
+     * Suppresses **campaign** email only. Transactional email — confirmations,
+     * reminders, quotes, invoices, receipts — is exempt, because the customer asked for
+     * the underlying thing, and withholding an invoice because someone unsubscribed
+     * from marketing would be the wrong reading of a narrower request.
+     */
+    emailOptedOut: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    /** When they unsubscribed. The audit trail a CAN-SPAM complaint would ask for. */
+    emailOptedOutAt: {
+      type: Date,
+      default: null,
+    },
+    /**
      * Residential or commercial.
      *
      * The customer form has always had a toggle for this and five screens have

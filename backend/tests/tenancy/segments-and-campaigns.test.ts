@@ -405,6 +405,43 @@ describe('the filter builder', () => {
 
     expect(clean).toEqual({ tags: ['VIP'] });
   });
+
+  /**
+   * The consent and channel flags are send-time concerns, not part of what a segment is.
+   *
+   * Storing one would mean a segment's headline count silently reflected a consent rule
+   * unrelated to its definition — and that count sits next to a send button. The campaign
+   * sender adds whichever apply to the channel it is about to use.
+   */
+  it('refuses to store send-time consent flags in a segment', () => {
+    const clean = sanitiseCustomerFilter({
+      tags: ['VIP'],
+      excludeOptedOut: true,
+      excludeEmailOptedOut: true,
+      requireEmail: true,
+    });
+
+    expect(clean).toEqual({ tags: ['VIP'] });
+  });
+
+  /** But the query builder must still honour them, because that is how campaigns work. */
+  it('still applies them when the campaign sender passes them directly', async () => {
+    await makeCustomer(ws.businessId, { tags: ['VIP'] });
+    await makeCustomer(ws.businessId, { tags: ['VIP'], isOptedOut: true });
+    await makeCustomer(ws.businessId, { tags: ['VIP'], emailOptedOut: true });
+
+    const smsQuery = await buildCustomerQuery(ws.businessId, {
+      tags: ['VIP'],
+      excludeOptedOut: true,
+    });
+    expect(await Customer.countDocuments(smsQuery)).toBe(2);
+
+    const emailQuery = await buildCustomerQuery(ws.businessId, {
+      tags: ['VIP'],
+      excludeEmailOptedOut: true,
+    });
+    expect(await Customer.countDocuments(emailQuery)).toBe(2);
+  });
 });
 
 describe('saved segments', () => {

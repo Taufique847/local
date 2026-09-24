@@ -31,12 +31,10 @@
 >   ('owner' \| 'dispatcher' \| 'technician') gates tenant endpoints. Both are read from the
 >   database per request, so a demotion applies on the next call rather than at token expiry.
 >   The "RBAC matrix would be vacuous" note under Untested Areas no longer applies.
-> - *"~90 discrete adversarial test cases"* run by hand — there is now a **377-test automated
+> - *"~90 discrete adversarial test cases"* run by hand — there is now a **416-test automated
 >   suite** (18 files) in CI covering tenancy, webhook signatures, RBAC, token lifecycles,
 >   job-completion pricing, notifications, templates, equipment and property data, and segment
->   campaigns. 141 mutations have been attempted against its guards and 139 caught; both
->   survivors are redundant tenant clauses whose load-bearing twins were caught, verified
->   behaviour-neutral and documented in place.
+>   campaigns. 165 mutations have been attempted against its guards and 164 caught; the one`r`n>   survivor is a redundant tenant clause whose load-bearing twin was caught, verified`r`n>   behaviour-neutral and documented in place.
 >
 > **Two Untested Areas from this report are still untested, for the same reasons:** the live voice
 > pipeline (no real call has ever been handled) and real Stripe payments (`STRIPE_SECRET_KEY`

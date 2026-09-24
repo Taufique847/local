@@ -52,6 +52,10 @@ export class CustomerService {
       lastServiceAt: customer.lastServiceAt ?? null,
       isOptedOut: Boolean(customer.isOptedOut),
       optedOutAt: customer.optedOutAt,
+      // The other consent, under the other law. Surfaced so the UI can show why a
+      // customer is excluded from an email campaign audience.
+      emailOptedOut: Boolean(customer.emailOptedOut),
+      emailOptedOutAt: customer.emailOptedOutAt,
       propertyType: customer.propertyType,
       // Access and property facts, previously trapped in free-text memory rows.
       property: customer.property,

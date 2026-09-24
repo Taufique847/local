@@ -164,14 +164,9 @@ Shipped. What landed, and the two places the plan was wrong:
 
 **Deliberately not done:** the SMS opt-out flag does not suppress email. `isOptedOut` is set only by an SMS `STOP` and its own refusal message says the customer cannot be contacted *by SMS*; transactional email is exempt from CAN-SPAM opt-out. Suppressing email off the back of it would mean a customer who stopped texts never receives their own invoice. A separate email-consent flag belongs with the campaigns on Day 13.
 
-> **This did not happen on Day 13, and it is still outstanding.** Day 13 shipped email
-> campaigns without an email-consent flag: an email campaign narrows its audience to
-> customers who *have* an address (`requireEmail`), but there is no way for a customer to
-> unsubscribe from marketing email and no field recording that they did. That is fine for
-> the transactional email this all started with, which is exempt — it is **not** fine for
-> a campaign, where CAN-SPAM requires a working opt-out. Anyone using the campaign feature
-> on the email channel should know that before they send. This is the first thing to fix in
-> the segments area.
+> **This did not happen on Day 13. It has since been done** — see the section below.
+> Leaving the original note visible because it is the more useful record: the promise was
+> made here, missed there, caught while writing documentation, and closed afterwards.
 
 **Verification:** 49 new tests (219 total, 14 files, all green). 24 mutations attempted, 23 caught. The one survivor — removing `reminderSentAt: null` from the reminder *candidate query* — was confirmed behaviour-neutral: the atomic claim is the real guard, and weakening **that** was caught. Backend `tsc` 0, `typecheck:tests` 0, `build` 0; frontend `tsc` 0, `build` 0; indexes synced.
 
@@ -205,7 +200,7 @@ Four features shipped. What landed, and the defects the work turned up.
 
 **Days 10–11 · #10 structured property and equipment.** New `Equipment` model and a `Customer.property` sub-object (gate code, access, pets, parking). `hasPets` is tri-state: `undefined` means nobody has asked, which is not "no pets", and a technician deciding whether to open a gate needs the difference. Transcript extraction writes **both** the memory row (provenance) and the structured field, and never overwrites what a person entered. The voice prompt reads the fields and excludes the four memory keys they came from, so the same fact does not appear twice in two wordings. Two real defects fixed in the dispatch text: the "Access/Gate" line was whichever `instruction` memory the loop saw last (a pet warning printed as a gate code), and `techPhone` defaulted to the **customer's** number — so an unassigned job texted the homeowner "DISPATCH ALERT" containing their own gate code. Removed a fabricated "Equipment Registry" card that showed the same six specifications (Carrier Infinity 16, R-410A, 8.2 lb charge) to every customer in every business.
 
-**Days 12–13 · #13 segments.** One thing the Day 2–5 notes promised for Day 13 and Day 13 did **not** deliver: an email-consent flag. Email campaigns ship without one, so there is no way for a customer to unsubscribe from marketing email. Transactional email is exempt from that requirement; a campaign is not. Flagged here and above rather than left for someone to discover. Fixed the plumbing first: `tags` were indexed, editable and **absent from the list DTO**, so the page's tag dropdowns had nothing to filter on; `createCustomer` and `updateCustomer` both accepted tags and dropped them. Tags are now normalised to upper case and deduplicated everywhere, because segment filters match exactly and two spellings means a segment missing half its audience. New shared `customer-filter.ts` builder used by the list, the segment count and the campaign audience — the same query, or a segment reading "42 customers" sends to 39 and nobody can say which number was wrong. New `CustomerSegment` model; the count is deliberately **not** stored. Campaigns go through `NotificationService` per recipient, so quiet hours and the SMS opt-out are enforced by the same code as everything else, and a campaign text is refused without an opt-out notice. Quiet hours are **not** bypassed here, unlike every transactional send — a campaign is a cold contact, which is what the window exists for. Capped at 500 recipients as a blast-radius limit.
+**Days 12–13 · #13 segments.** Fixed the plumbing first: `tags` were indexed, editable and **absent from the list DTO**, so the page's tag dropdowns had nothing to filter on; `createCustomer` and `updateCustomer` both accepted tags and dropped them. Tags are now normalised to upper case and deduplicated everywhere, because segment filters match exactly and two spellings means a segment missing half its audience. New shared `customer-filter.ts` builder used by the list, the segment count and the campaign audience — the same query, or a segment reading "42 customers" sends to 39 and nobody can say which number was wrong. New `CustomerSegment` model; the count is deliberately **not** stored. Campaigns go through `NotificationService` per recipient, so quiet hours and the SMS opt-out are enforced by the same code as everything else, and a campaign text is refused without an opt-out notice. Quiet hours are **not** bypassed here, unlike every transactional send — a campaign is a cold contact, which is what the window exists for. Capped at 500 recipients as a blast-radius limit.
 
 Two more "declared and never written" fields closed along the way: `lifetimeValue` was permanently `0` (now incremented in `applyPayment`, payments received rather than invoices raised) and `lastServiceAt` did not exist (now stamped with `$max` on both completion paths). Without them, a "worth over $500" segment would be permanently empty and a win-back segment would match everybody.
 
@@ -222,6 +217,29 @@ Mutations, per group, so the total is checkable rather than asserted:
 | **Total** | **90** | **89** | **1** |
 
 Backend `tsc` 0, `typecheck:tests` 0, `build` 0; frontend `tsc` 0, `build` 0; indexes synced. Two new dry-run-by-default scripts (`migrate:property-memories`, `backfill:customer-rollups`) both report 0 rows against the live database, which is consistent with the voice pipeline never having handled a real call.
+
+### Day 13½ · email consent — ✅ **done**
+
+Closing the one gap that kept #13 partial. Written up separately because it was not on the
+plan: it was promised in the Day 2–5 notes for Day 13, missed, and found while reconciling
+documentation rather than by a test.
+
+- `Customer.emailOptedOut` / `emailOptedOutAt`, **separate** from `isOptedOut`. Two consents under two different laws: one is set by texting `STOP` (TCPA), the other by clicking unsubscribe (CAN-SPAM). Conflating them breaks the product in both directions — a customer who stopped texts would lose their own invoice, and a customer who unsubscribed from promotions would keep getting them. There is a test asserting independence in both directions.
+- Campaign email carries an unsubscribe link **and** the `List-Unsubscribe` / `List-Unsubscribe-Post` headers. Both, not either: the footer link satisfies the law, the headers are what make Gmail and Outlook render a native unsubscribe button, and a recipient who cannot find the link reports spam instead — which costs the sending domain more than the lost contact.
+- Transactional email carries **neither**, deliberately. It is exempt, and offering to unsubscribe someone from their own invoice would be offering something the system would not honour.
+- `GET /api/portal/unsubscribe/:token` describes; `POST` acts. Not REST pedantry — mail clients and security scanners prefetch links, so a GET that unsubscribed would opt out recipients who never clicked. The POST is also what RFC 8058 one-click requires. New public page at `/unsubscribe/[token]` that loads a description and waits for a click.
+- Token is HMAC-signed with a key derived from `JWT_SECRET`, carries both ids so it cannot be repointed at another tenant's customer, and is deliberately **not** single-use — a forwarded email or a second click must not error. No expiry either: a dead unsubscribe link leaves the recipient with a spam complaint as their only option.
+- Re-subscribing is staff-only and not reachable by link, so the unsubscribe page cannot undo itself and a prefetching scanner cannot opt somebody back in.
+
+**Two things this turned up that were not the feature.**
+
+*One:* three mutations survived the first pass and each exposed a different real gap rather than a benign redundancy. The derived signing key was untested (a token signed with the raw `JWT_SECRET` would have verified); `EmailService` forwarding headers to the provider was untested, because every existing test stubs `EmailService.send` and never reaches its body — so **new `tests/notifications/email-service.test.ts`** covers the service itself with `fetch` stubbed; and `sanitiseCustomerFilter` was accepting three send-time consent flags that nothing could reach, so they were **removed** rather than tested. Second pass: 24 of 24.
+
+*Two:* an uncommitted change to `createAppointmentUnlocked` was already in the working tree, adding the booking-policy and opening-hours checks that the create path lacked while reschedule had them. It is correct — a create path that skips a check reschedule enforces is inconsistent, and booking a technician for 3am should not succeed — so it was kept and the fixtures fixed rather than reverted. It broke 19 tests, and the cause is worth recording: **fixtures built times as `Date.now() + N hours`, which is time-of-day dependent** once opening hours are enforced. The same 48-hour offset passed at 13:00 UTC and failed at 03:21, because the job then landed at 23:21 local and its 90 minutes crossed midnight. New `bookableAt()` helper returns midday, clear of the notice, horizon and closing-time edges. One test also had a hardcoded 2026 date that had silently drifted into the past and was failing the minimum-notice check rather than testing the timezone behaviour it was written for.
+
+Fixtures are now pinned to **UTC**, which papers over a real inconsistency rather than fixing it: `getAvailableSlots` buckets slots in UTC while `isWithinBusinessHours` compares in the business timezone, so a business in any other zone can be offered a slot the booking path then rejects. That is the Day 16 defect, and it is next.
+
+**Verification.** 416 tests / 20 files, all green. 24 mutations, all 24 caught after the second pass. Backend `tsc` 0, `typecheck:tests` 0, `build` 0; frontend `tsc` 0, `build` 0; indexes synced. `EMAIL_API_KEY` is still unset, so the unsubscribe mechanism is exercised only with the sender stubbed — no real unsubscribe link has been clicked from a real inbox.
 
 <details>
 <summary>Original plan for Days 6–13</summary>

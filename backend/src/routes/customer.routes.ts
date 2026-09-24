@@ -31,6 +31,16 @@ router.put('/:id/tags', Customer360Controller.updateTags as any);
 router.post('/:id/erase', CustomerController.erasePersonalData as any);
 
 /**
+ * Re-subscribes a customer to marketing email.
+ *
+ * Staff-only, and deliberately not reachable from a link. A customer who wants email
+ * again asks the business; putting a re-subscribe link in an email would let the
+ * unsubscribe page undo itself, and a prefetching mail scanner hitting it would opt
+ * somebody back in without anybody clicking.
+ */
+router.post('/:id/resubscribe-email', CustomerController.resubscribeEmail as any);
+
+/**
  * Equipment on the customer's property.
  *
  * Nested for reads and creates because a unit only exists in the context of one

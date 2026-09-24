@@ -1,6 +1,6 @@
 # BlueCollar AI — Final Feature Status
 
-> **Verified:** 23 September 2026, by reading `backend/src` and `frontend/app` directly, by running the built server against a live database, and by a 377-test automated suite whose guards were each confirmed by deliberately breaking them.
+> **Verified:** 23 September 2026, by reading `backend/src` and `frontend/app` directly, by running the built server against a live database, and by a 416-test automated suite whose guards were each confirmed by deliberately breaking them.
 >
 > Reference vision: `targetFeaturesIdea.md` (86 numbered features, sections A–J).
 > This file supersedes the status sections of `PROJECT_STATUS_AND_ROADMAP.md`, which was written before the Week 1–4 hardening, Tier 1/Tier 2 work and QA bug fixes landed.
@@ -11,10 +11,10 @@
 
 | Measure | Value |
 |---|---|
-| Features **fully built and verified** | **36 of 86** (~42%) |
-| Features **partially built** (usable but incomplete) | **5 of 86** (~6%) |
+| Features **fully built and verified** | **37 of 86** (~43%) |
+| Features **partially built** (usable but incomplete) | **4 of 86** (~5%) |
 | Features **not started** | **45 of 86** (~52%) |
-| Weighted completion against the full vision | **~45%** (built = 1, partial = 0.5 → 36 + 2.5 = 38.5 of 86) |
+| Weighted completion against the full vision | **~45%** (built = 1, partial = 0.5 → 37 + 2 = 39 of 86) |
 | Completion against a **launchable MVP** (§7 of the vision doc) | **~90%** |
 
 Two different questions, two different answers:
@@ -22,7 +22,7 @@ Two different questions, two different answers:
 - **"Is the 86-feature enterprise platform done?"** No — a bit over a third.
 - **"Is there a product a contractor could pay for?"** Nearly. What blocks it now is one thing: the voice pipeline has never handled a real call.
 
-> **Counting note.** An earlier revision of this file claimed 26 built / 13 partial. That headline never matched its own tables — counting the numbered rows below gives 36 and 5. The tables were right; the summary was wrong. Numbers here are now derived from the tables by counting ✅ and 🟡 rows, and the weighting formula is stated inline rather than left implicit — the previous "~38%" had no stated derivation, so it could not be checked.
+> **Counting note.** An earlier revision of this file claimed 26 built / 13 partial. That headline never matched its own tables — counting the numbered rows below gives 37 and 4. The tables were right; the summary was wrong. Numbers here are now derived from the tables by counting ✅ and 🟡 rows, and the weighting formula is stated inline rather than left implicit — the previous "~38%" had no stated derivation, so it could not be checked.
 
 The estimate in `PROJECT_STATUS_AND_ROADMAP.md` was 18–20%. The rise is mostly hardening and correctness rather than new surface area: the voice pipeline became real, the security holes closed, a large amount of fabricated data was removed, and the product gained the two things that stop it being single-user — staff accounts and a password recovery path.
 
@@ -50,7 +50,7 @@ Each row was confirmed in code, and where marked ✓runtime, exercised against a
 | 9 | Customer CRM profile | ✅ Built | Customer 360 view aggregating appointments, invoices, calls, memories. |
 | 10 | Property notes | ✅ Built | Structured `Customer.property` (gate code, access instructions, pets, parking) and a real `Equipment` model (type, brand, model, serial, install year, filter size, location, warranty). `hasPets` is tri-state — "not asked" is not "no pets". Transcript extraction writes the structured field *and* keeps the memory row for provenance, and never overwrites what a person entered. The voice prompt and the dispatch text both read the fields. Still no per-field access control: the gate code is plain text and visible to any staff login, which is flagged in the model. |
 | 12 | Lost-lead follow-up | ✅ Built | Drip campaign with backoff, attempt cap and honest failure recording. |
-| 13 | Customer segmentation | 🟡 Partial | Tags now reach the list API at all — they were indexed, editable and omitted from the DTO, so the page's tag filters had nothing to filter on. Saved `CustomerSegment` records with live (never cached) counts, filters on tags in/all/none, lifetime value, last service date, never-serviced, property type and equipment brand, and campaigns that send through `NotificationService` per recipient so quiet hours and the SMS opt-out apply. Campaign texts are refused without an opt-out notice; capped at 500 recipients. Also closed two fields nothing wrote: `lifetimeValue` (permanently 0) and `lastServiceAt` (absent), without which two of these filters could never match. **Marked partial for one reason: there is no email-consent flag.** An email campaign can be sent and a customer has no way to unsubscribe from marketing email. Transactional email is exempt from that requirement; a campaign is not. |
+| 13 | Customer segmentation | ✅ Built | Tags now reach the list API at all — they were indexed, editable and omitted from the DTO, so the page's tag filters had nothing to filter on. Saved `CustomerSegment` records with live (never cached) counts, filters on tags in/all/none, lifetime value, last service date, never-serviced, property type and equipment brand, and campaigns that send through `NotificationService` per recipient so quiet hours and the SMS opt-out apply. Campaign texts are refused without an opt-out notice; capped at 500 recipients. Also closed two fields nothing wrote: `lifetimeValue` (permanently 0) and `lastServiceAt` (absent), without which two of these filters could never match. Email consent is now a first-class flag: `Customer.emailOptedOut` is separate from `isOptedOut` (two consents, two laws — one is set by texting `STOP`, the other by clicking unsubscribe), campaign email carries an unsubscribe link **and** the `List-Unsubscribe` / `List-Unsubscribe-Post` headers that render Gmail's and Outlook's native button, and transactional email deliberately carries neither because it is exempt. The public endpoint splits GET (describes) from POST (acts), since mail scanners prefetch links and a GET that unsubscribed would opt out people who never clicked. |
 
 ### C. Calendar, booking and dispatch
 
@@ -129,7 +129,7 @@ Each row was confirmed in code, and where marked ✓runtime, exercised against a
 | Password reset by email, single-use, revokes all sessions | ✅ Built ✓tested (send path unexercised) |
 | Staff invitations — email link, single use, tenant-bound | ✅ Built ✓tested (send path unexercised) |
 | Media-stream WebSocket authorization (single-use signed token) | ✅ Built ✓tested |
-| Automated test suite — 377 tests over tenancy, money, auth, pricing, notifications and segments | ✅ Built, wired into CI |
+| Automated test suite — 416 tests over tenancy, money, auth, pricing, notifications and segments | ✅ Built, wired into CI |
 | Data retention sweep + per-customer data erasure | ✅ Built |
 | AI/recording disclosure spoken before the assistant answers | ✅ Built |
 | Docker, compose, CI (typecheck/build/secrets/image) | ✅ Built |
@@ -150,7 +150,7 @@ Each row was confirmed in code, and where marked ✓runtime, exercised against a
 | A2 | **Password reset flow** | ✅ Done | There was no recovery path at all — a forgotten password meant permanent lockout. | — |
 | A3 | **Commit the work** | ✅ Done | Committed in four logical commits on `feat/staff-accounts-rbac-and-tests` and pushed. Verified no `.env`, key material or temp file entered any commit. | — |
 | ~~A4~~ | ~~**Rotate the leaked credential**~~ | ❌ **Withdrawn — was never true** | See below. | — |
-| A5 | **Tests for the money and tenancy paths** | ✅ Done | The QA pass found a critical cross-tenant hole precisely because nothing guarded these. 377 tests now cover worker tenant + per-technician scoping, portal share tokens, Stripe and Twilio webhook signatures, RBAC, password reset, invitations, the media-stream token, job-completion pricing, SMS consent, notification templates, equipment and property data, and segment campaigns. | — |
+| A5 | **Tests for the money and tenancy paths** | ✅ Done | The QA pass found a critical cross-tenant hole precisely because nothing guarded these. 416 tests now cover worker tenant + per-technician scoping, portal share tokens, Stripe and Twilio webhook signatures, RBAC, password reset, invitations, the media-stream token, job-completion pricing, SMS consent, notification templates, equipment and property data, and segment campaigns. | — |
 
 **On defects found since.** Writing `partial.md` — a day-by-day plan to finish the nine partial features — required reading all nine at model, service, controller and page level. That read turned up **seven defects in shipped code**, all now fixed with tests and mutation checks. Four shared one root cause worth naming: code reading or writing a field that does not exist on the schema, which Mongoose silently tolerates in both directions. The worst of them meant a customer who texted STOP kept receiving messages. Details in `partial.md` §2.
 
@@ -251,7 +251,7 @@ Worth knowing before a demo, because each one reads as finished in the UI.
 | Job-completion pricing | Automated — a $450 service bills 450, per-business tax and labour rates, diagnostic credit against the taxable base |
 | Technician assignment | Automated through the real booking path — cross-tenant and inactive technicians refused, name derived from the record |
 | SMS consent | Automated — STOP persists and blocks sending, START restores, no duplicate booking from a consent reply |
-| **Automated tests** | ✅ 377 tests, 18 files, in CI. Mutation-checked: **141 deliberate regressions attempted, 139 caught** (27 on staff accounts/RBAC, 24 on Days 2–5, 90 on Days 6–13 — per-group breakdown in `partial.md`). Both survivors are redundant tenant clauses whose load-bearing twins *were* caught; each was verified behaviour-neutral and documented in place. Separately, one guard was found to be **unreachable** and deleted rather than left implying a check that could never fire |
+| **Automated tests** | ✅ 416 tests, 20 files, in CI. Mutation-checked: **165 deliberate regressions attempted, 164 caught** (27 on staff accounts/RBAC, 24 on Days 2–5, 90 on Days 6–13, 24 on email consent — per-group breakdown in `partial.md`). The single survivor is a redundant tenant clause whose load-bearing twin *was* caught, verified behaviour-neutral and documented in place. Separately, two pieces of code were found to be **unreachable** and deleted rather than left implying checks that could never fire |
 | **Voice pipeline end to end** | ❌ Never — no provider keys |
 | **Email delivery** | ❌ Never — no `EMAIL_API_KEY`. Reset and invite flows are tested with the sender stubbed, so the token lifecycle is proven and the Resend call is not |
 | **Live card payment** | ❌ Never — Stripe in simulation mode |

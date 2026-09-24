@@ -59,12 +59,14 @@ export interface SegmentPreview {
     lifetimeValue?: number;
     lastServiceAt?: string | null;
     isOptedOut?: boolean;
+    emailOptedOut?: boolean;
   }>;
 }
 
 /** Human labels for why a recipient was not contacted. */
 export const CAMPAIGN_REASON_LABELS: Record<string, string> = {
   customer_opted_out: 'Opted out of texts',
+  email_unsubscribed: 'Unsubscribed from marketing email',
   quiet_hours: 'Outside texting hours',
   no_phone_number: 'No phone number',
   no_email_address: 'No email address',

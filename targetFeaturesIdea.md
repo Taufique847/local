@@ -3,9 +3,9 @@
 > **Nothing here describes what exists.** This is the north-star feature specification — all 86
 > numbered features across sections A–J — written before construction. It is the document
 > `FINAL.md` counts against, and it is deliberately left unedited so that count stays meaningful:
-> if the target moved every time something shipped, "36 of 86" would mean nothing.
+> if the target moved every time something shipped, "37 of 86" would mean nothing.
 >
-> As of 23 September 2026: **36 built, 5 partial, 45 not started** (~45% weighted). See `FINAL.md`
+> As of 23 September 2026: **37 built, 4 partial, 45 not started** (~45% weighted). See `FINAL.md`
 > for the feature-by-feature status and `partial.md` for what is outstanding and in what order.
 >
 > Two things to know before reading:

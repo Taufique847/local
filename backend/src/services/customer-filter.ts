@@ -34,6 +34,13 @@ export interface CustomerFilterInput {
   equipmentBrand?: string;
   /** Excluded when true, so a campaign audience can skip them up front. */
   excludeOptedOut?: boolean;
+  /**
+   * Excludes customers who unsubscribed from marketing email.
+   *
+   * Separate from `excludeOptedOut`, which is the SMS/TCPA flag. Set by email
+   * campaigns only — transactional email is exempt and must not consult this.
+   */
+  excludeEmailOptedOut?: boolean;
   /** Only customers with an email address. Used by email campaigns. */
   requireEmail?: boolean;
 }
@@ -182,6 +189,10 @@ export const buildCustomerQuery = async (
     query.isOptedOut = { $ne: true };
   }
 
+  if (filter.excludeEmailOptedOut) {
+    query.emailOptedOut = { $ne: true };
+  }
+
   if (filter.requireEmail) {
     and.push({ email: { $exists: true, $nin: [null, ''] } });
   }
@@ -236,8 +247,21 @@ export const sanitiseCustomerFilter = (input: any): CustomerFilterInput => {
   if (typeof input.equipmentBrand === 'string' && input.equipmentBrand.trim()) {
     out.equipmentBrand = input.equipmentBrand.trim();
   }
-  if (input.excludeOptedOut === true) out.excludeOptedOut = true;
-  if (input.requireEmail === true) out.requireEmail = true;
+  /**
+   * `excludeOptedOut`, `excludeEmailOptedOut` and `requireEmail` are deliberately NOT
+   * carried through here.
+   *
+   * They are send-time concerns, not part of what a segment *is*. The campaign sender
+   * adds whichever apply to the channel it is about to use, and it passes that composed
+   * object straight to `buildCustomerQuery`. Persisting them inside a stored segment
+   * would mean a segment's headline count silently reflected a consent rule that has
+   * nothing to do with its definition — and the count is shown next to a send button.
+   *
+   * They were briefly accepted here and it made no difference to any behaviour, which is
+   * how it came to light: a mutation removing them survived, because nothing could reach
+   * them. `buildCustomerQuery` still understands all three — it has to, since the
+   * campaign sender passes them — they just cannot be *stored*.
+   */
 
   return out;
 };

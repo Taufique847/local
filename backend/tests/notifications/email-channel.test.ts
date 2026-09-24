@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Types } from 'mongoose';
 import {
+  bookableAt,
   createWorkspace,
   createCustomerRecord,
   createServiceRecord,
@@ -432,7 +433,7 @@ describe('triggers that previously had no sender', () => {
     await AppointmentService.createAppointment(ws.businessId, {
       customerId: customer._id.toString(),
       serviceId: service._id.toString(),
-      startAt: new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString(),
+      startAt: bookableAt().toISOString(),
     });
 
     const rows = await CommunicationLog.find({
@@ -453,8 +454,15 @@ describe('triggers that previously had no sender', () => {
       createServiceRecord(ws.businessId),
     ]);
 
-    // 20:00 UTC is 1:00 PM in Phoenix (UTC-7, no DST).
-    const startAt = new Date('2026-07-15T20:00:00.000Z');
+    /**
+     * 20:00 UTC is 1:00 PM in Phoenix (UTC-7, no DST).
+     *
+     * Dated far enough ahead to stay inside the booking horizon as the calendar moves —
+     * this was originally a 2026 date and silently drifted into the past, at which point
+     * it failed the minimum-notice check rather than testing anything about timezones.
+     */
+    const startAt = new Date(bookableAt(10));
+    startAt.setUTCHours(20, 0, 0, 0);
 
     await AppointmentService.createAppointment(ws.businessId, {
       customerId: customer._id.toString(),
@@ -573,7 +581,7 @@ describe('triggers that previously had no sender', () => {
     const appointment = await AppointmentService.createAppointment(ws.businessId, {
       customerId: customer._id.toString(),
       serviceId: service._id.toString(),
-      startAt: new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString(),
+      startAt: bookableAt().toISOString(),
     });
 
     expect(appointment._id).toBeInstanceOf(Types.ObjectId);

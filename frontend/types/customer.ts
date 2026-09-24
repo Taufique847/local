@@ -105,6 +105,15 @@ export interface Customer {
   /** True once the customer has texted STOP. They cannot be sent SMS. */
   isOptedOut?: boolean;
   optedOutAt?: string | null;
+  /**
+   * True once they clicked unsubscribe in a marketing email.
+   *
+   * A different consent from `isOptedOut`, under a different law. Excludes them from
+   * email **campaigns** only — transactional email (confirmations, reminders, invoices,
+   * receipts) is exempt and still sends.
+   */
+  emailOptedOut?: boolean;
+  emailOptedOutAt?: string | null;
   source?: string;
   createdAt: string;
   updatedAt: string;

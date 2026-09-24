@@ -148,6 +148,16 @@ export interface SendNotificationOptions {
   /** Replaces the rendered body on both channels. Used by ad-hoc sends. */
   bodyOverride?: string;
   subjectOverride?: string;
+  /**
+   * Marks this as a campaign rather than a transactional message.
+   *
+   * Set only by the segment campaign sender. On the email channel it adds an
+   * unsubscribe link and the `List-Unsubscribe` headers, and it makes the send respect
+   * `Customer.emailOptedOut`. Transactional mail deliberately does neither: it is
+   * exempt from CAN-SPAM's opt-out requirement, and offering to unsubscribe somebody
+   * from their own invoice would be offering something we would not honour.
+   */
+  marketing?: boolean;
 }
 
 /**

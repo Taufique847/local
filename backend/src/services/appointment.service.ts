@@ -174,6 +174,35 @@ export class AppointmentService {
       ? new Date(input.endAt)
       : new Date(startAt.getTime() + durationMinutes * 60 * 1000);
 
+    /**
+     * Booking policy — minimum notice and maximum horizon.
+     *
+     * Previously enforced only by the AI tool executor's guardrail gate, so a
+     * booking created from the dashboard could violate the business's own rules.
+     * Moving the check here means every path — voice AI, dashboard, API — is
+     * subject to the same policy.
+     */
+    const { PolicyGuardrailsService } = await import('./policy-guardrails.service');
+    const bookingTimeCheck = await PolicyGuardrailsService.validateBookingTime(businessId, startAt);
+    if (!bookingTimeCheck.valid) {
+      throw new AppError(bookingTimeCheck.reason || 'Booking time violates scheduling policy.', 409);
+    }
+
+    /**
+     * Business hours — reject bookings outside the business's published opening
+     * hours.
+     *
+     * The reschedule path already had this check; the create path did not, so a
+     * new booking on a closed Sunday or at 3 AM succeeded — the conflict check
+     * reported the slot free because nobody works then. A business that has not
+     * configured hours is treated as always open, so a fresh account is not
+     * blocked.
+     */
+    const hoursCheck = await AvailabilityService.isWithinBusinessHours(businessId, startAt, endAt);
+    if (!hoursCheck.ok) {
+      throw new AppError(hoursCheck.reason || 'That time is outside your opening hours.', 409);
+    }
+
     // Double-booking conflict check
     const hasConflict = await AvailabilityService.checkSlotConflict(businessId, startAt, endAt);
     if (hasConflict) {

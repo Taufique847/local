@@ -461,8 +461,11 @@ export function SegmentPanel({ onApplySegment, knownTags = [] }: SegmentPanelPro
               </p>
               <p className="text-[11px] text-slate-600">
                 {campaignFor.count} customer{campaignFor.count === 1 ? '' : 's'} in this segment.
-                Anyone who has opted out of texts is skipped, and nothing sends outside
-                8:00 AM–9:00 PM local time.
+                Nothing sends outside 8:00 AM–9:00 PM local time. On text, anyone who
+                replied STOP is skipped; on email, anyone who unsubscribed is skipped —
+                these are separate consents, so opting out of one does not opt out of the
+                other. Use <span className="font-semibold">Check audience</span> to see the
+                real number for the channel you picked.
               </p>
             </div>
             <Button variant="outline" size="sm" onClick={() => setCampaignFor(null)}>

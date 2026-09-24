@@ -58,6 +58,13 @@ export interface ICustomer extends Document {
   /** When the opt-out was recorded. Kept as the compliance audit trail. */
   optedOutAt?: Date | null;
   /**
+   * Marketing **email** consent — a different consent under a different law from
+   * `isOptedOut`, which is SMS/TCPA. Suppresses campaigns only; transactional email
+   * (invoices, receipts, reminders) is exempt and still sends.
+   */
+  emailOptedOut?: boolean;
+  emailOptedOutAt?: Date | null;
+  /**
    * Residential or commercial.
    *
    * The UI has always collected this — a toggle in the customer form — and
@@ -94,6 +101,9 @@ export interface CustomerDTO {
    */
   isOptedOut?: boolean;
   optedOutAt?: string | Date | null;
+  /** Marketing email consent. Separate from `isOptedOut`, which is SMS. */
+  emailOptedOut?: boolean;
+  emailOptedOutAt?: string | Date | null;
   propertyType?: CustomerPropertyType;
   property?: ICustomerProperty;
   status: CustomerStatus;

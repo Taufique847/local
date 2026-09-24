@@ -266,7 +266,15 @@ export class CustomerSegmentService {
     const audienceFilter: CustomerFilterInput = {
       ...segment.filter,
       ...(input.channel === 'sms' ? { excludeOptedOut: true } : {}),
-      ...(input.channel === 'email' ? { requireEmail: true } : {}),
+      /**
+       * Email campaigns exclude anyone who unsubscribed, and require an address.
+       *
+       * `excludeEmailOptedOut` is the CAN-SPAM flag and is deliberately NOT
+       * `excludeOptedOut` — that one is TCPA and is set by an SMS `STOP`. A customer who
+       * stopped texts has not asked to stop receiving email, and treating one as the
+       * other would silently shrink every email audience.
+       */
+      ...(input.channel === 'email' ? { requireEmail: true, excludeEmailOptedOut: true } : {}),
     };
 
     const query = await buildCustomerQuery(businessId, audienceFilter);
@@ -305,6 +313,12 @@ export class CustomerSegmentService {
             channels: input.channel,
             bodyOverride: body,
             subjectOverride: input.subject,
+            /**
+             * This is the only caller that sets it. It adds the unsubscribe link and
+             * headers on email, and makes the send honour `Customer.emailOptedOut` —
+             * neither of which a transactional message should do.
+             */
+            marketing: true,
             /**
              * Quiet hours are NOT bypassed.
              *
