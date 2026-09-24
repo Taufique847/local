@@ -4,6 +4,7 @@ import { Customer } from '../models/customer.model';
 import { DocumentNumberService } from './document-number.service';
 import { PolicyGuardrailsService } from './policy-guardrails.service';
 import { NotificationService } from './notification.service';
+import { PricingService, PricingDiscount } from './pricing.service';
 import { AppError } from '../types';
 import { generateShareToken, isValidShareTokenFormat } from '../utils/share-token';
 
@@ -18,6 +19,12 @@ export class InvoiceService {
       items: IInvoiceItem[];
       diagnosticFeeCredit?: number;
       taxRate?: number;
+      /** Overrides the appointment's priority. Lets an owner charge or waive it. */
+      emergency?: boolean;
+      emergencyFee?: number;
+      /** Overrides the zone lookup. */
+      travelFee?: number;
+      discount?: PricingDiscount;
       dueDate?: Date;
       notes?: string;
     }
@@ -30,16 +37,34 @@ export class InvoiceService {
     const invoiceNumber = await DocumentNumberService.next(businessId, 'invoice');
     const shareToken = generateShareToken('inv');
 
-    // Calculations
-    const subtotal = data.items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
-    const diagCredit = data.diagnosticFeeCredit ?? 0;
-    const taxableSubtotal = Math.max(0, subtotal - diagCredit);
-    // Falls back to the business's own rate rather than an 8.25% literal, which
-    // was correct for exactly one tax jurisdiction.
+    /**
+     * All arithmetic lives in `PricingService`.
+     *
+     * This method, `EstimateService.createEstimate` and `WorkerService.completeJob`
+     * each held their own copy of it, and they had already drifted apart — the field
+     * app's copy hardcoded 8.25% tax, and none of the three billed the emergency fee.
+     */
     const policy = await PolicyGuardrailsService.getPolicy(businessId);
-    const taxRate = data.taxRate ?? policy.taxRate;
-    const taxAmount = parseFloat((taxableSubtotal * taxRate).toFixed(2));
-    const totalAmount = parseFloat((taxableSubtotal + taxAmount).toFixed(2));
+
+    const { emergency, travelFee } = await PricingService.resolveJobContext(businessId, {
+      appointmentId: data.appointmentId || null,
+      zip: (customer as any).address?.zip ?? null,
+      emergency: data.emergency,
+      travelFee: data.travelFee,
+    });
+
+    const quote = PricingService.quote(
+      {
+        items: data.items,
+        diagnosticFeeCredit: data.diagnosticFeeCredit,
+        taxRate: data.taxRate,
+        emergency,
+        emergencyFee: data.emergencyFee,
+        travelFee,
+        discount: data.discount,
+      },
+      policy
+    );
 
     const invoice = await Invoice.create({
       businessId,
@@ -48,19 +73,20 @@ export class InvoiceService {
       estimateId: data.estimateId || null,
       invoiceNumber,
       title: data.title || 'HVAC Service & Repair Invoice',
-      items: data.items.map((i) => ({
-        description: i.description,
-        quantity: i.quantity,
-        unitPrice: i.unitPrice,
-        total: parseFloat((i.quantity * i.unitPrice).toFixed(2)),
-      })),
-      subtotal,
-      diagnosticFeeCredit: diagCredit,
-      taxRate,
-      taxAmount,
-      totalAmount,
+      items: quote.items,
+      subtotal: quote.subtotal,
+      diagnosticFeeCredit: quote.diagnosticFeeCredit,
+      emergencyFee: quote.emergencyFee,
+      travelFee: quote.travelFee,
+      discountType: quote.discountType,
+      discountValue: quote.discountValue,
+      discountAmount: quote.discountAmount,
+      discountReason: quote.discountReason,
+      taxRate: quote.taxRate,
+      taxAmount: quote.taxAmount,
+      totalAmount: quote.totalAmount,
       amountPaid: 0,
-      balanceDue: totalAmount,
+      balanceDue: quote.totalAmount,
       status: 'unpaid',
       dueDate: data.dueDate || new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
       notes: data.notes,

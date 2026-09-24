@@ -11,14 +11,14 @@
 
 | Bucket | % of total product vision (`targetFeaturesIdea.md` ke 86 features ke hisaab se) |
 |---|---|
-| **Fully built aur verified** | **37 of 86 (~43%)** |
-| **Partially built** (usable, incomplete) | **4 of 86 (~5%)** |
+| **Fully built aur verified** | **38 of 86 (~44%)** |
+| **Partially built** (usable, incomplete) | **3 of 86 (~3%)** |
 | **Not started** | **45 of 86 (~52%)** |
-| **Weighted** (built = 1, partial = 0.5 → 37 + 2 = 39/86) | **~45%** |
+| **Weighted** (built = 1, partial = 0.5 → 38 + 1.5 = 39.5/86) | **~46%** |
 
 > **Is file me pehle ~18-20% likha tha.** Wo 22 September ka estimate tha aur us waqt sahi tha.
 > Uske baad: security baseline poora hua (RBAC, password reset, email verification, token
-> revocation, 416-test suite), customer-facing email aur appointment reminders bane, reply
+> revocation, 497-test suite), customer-facing email aur appointment reminders bane, reply
 > handling, per-business templates, structured equipment/property data, aur kaam karne wale
 > segments + campaigns. Saath me **23 real defects** fix hue — zyada tar aise jo chup-chaap galat
 > kaam kar rahe the, error nahi de rahe the.
@@ -82,7 +82,7 @@ Is section me pehle nau gaps the. Aath band ho gaye:
 | ~~No email sending capability at all~~ | ✅ `EmailService` (Resend, `EMAIL_PROVIDER` ke peeche provider-agnostic) + poora `NotificationService` layer. **Lekin `EMAIL_API_KEY` set nahi hai**, to abhi tak ek bhi email actually gaya nahi — dekho section 0. |
 | ~~No call-recording consent disclosure~~ | ✅ `BusinessPolicy.aiDisclosureEnabled`, **default ON**. Kai US states all-party consent hain aur synthetic-voice disclosure ka requirement badh raha hai, to safe default announce karna hai. Band karna ek deliberate decision hona chahiye. |
 | ~~No data retention policy~~ | ✅ Nightly `data_retention` sweep. `DATA_RETENTION_DAYS` **default `0` (off)** — jaan-boojh ke, taaki naye build ka pehla boot operator ke existing records delete karna shuru na kar de. |
-| ~~No automated tests anywhere~~ | ✅ **416 tests, 20 files, CI me.** Real in-process MongoDB ke against, mocked models ke nahi — kyunki jo cheezein ye tests protect karte hain wo zyada tar query filters hain (`findOne({_id, businessId})` vs `findById(_id)`), aur mocked model vulnerable version ko bhi khushi se "pass" kar deta. 141 mutations lagaye, 139 pakde gaye — dono survivors redundant tenant clauses the jinke load-bearing jode pakde gaye, aur code me wahin document kar diye gaye. |
+| ~~No automated tests anywhere~~ | ✅ **497 tests, 21 files, CI me.** Real in-process MongoDB ke against, mocked models ke nahi — kyunki jo cheezein ye tests protect karte hain wo zyada tar query filters hain (`findOne({_id, businessId})` vs `findById(_id)`), aur mocked model vulnerable version ko bhi khushi se "pass" kar deta. 141 mutations lagaye, 139 pakde gaye — dono survivors redundant tenant clauses the jinke load-bearing jode pakde gaye, aur code me wahin document kar diye gaye. |
 
 **Sirf ye bacha hai:**
 
@@ -175,7 +175,7 @@ Aapke paas ~2.5 mahine hain. Sab kuch banana possible nahi hai — is roadmap ka
 3. ~~Basic RBAC~~ — ✅ do axes, database se per request padha jaata hai. Owner / dispatcher / technician.
 4. ~~Call-recording consent disclosure~~ — ✅ `aiDisclosureEnabled`, default ON.
 5. ~~Data retention decision + deletion~~ — ✅ nightly sweep, `DATA_RETENTION_DAYS` default off; plus per-customer personal-data erasure jo financial history retain karta hai.
-6. ~~Minimum viable automated tests~~ — ✅ overshot: 416 tests, 20 files, CI me. Stripe aur Twilio signature, portal share tokens, tenant scoping, RBAC, token lifecycles, aur job-completion pricing sab covered.
+6. ~~Minimum viable automated tests~~ — ✅ overshot: 497 tests, 21 files, CI me. Stripe aur Twilio signature, portal share tokens, tenant scoping, RBAC, token lifecycles, aur job-completion pricing sab covered.
 7. **Real call test with live Deepgram + LLM + Twilio credentials.** ⬅ **ABHI BHI PENDING. Ye Phase A ka aakhri item hai aur poore project ki sabse important unverified cheez.**
 
    Jo chahiye: cloudflared tunnel restart karke naya URL `TWILIO_WEBHOOK_BASE_URL` me daalo, backend restart karo, Twilio console me `+17372508034` ka voice webhook `<tunnel>/api/webhooks/twilio/voice` pe point karo. Twilio trial sirf **verified** numbers pe call karta hai, to `business.phone` verified hona chahiye, aur ek `active` + `isPrimary` `BusinessPhoneNumber` row bhi honi chahiye.

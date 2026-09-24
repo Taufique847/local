@@ -7,6 +7,7 @@ import { Service } from '../models/service.model';
 import { DocumentNumberService } from './document-number.service';
 import { PolicyGuardrailsService } from './policy-guardrails.service';
 import { NotificationService } from './notification.service';
+import { PricingService, PricingLineItem } from './pricing.service';
 import { generateShareToken } from '../utils/share-token';
 import { AppError } from '../types';
 
@@ -239,8 +240,15 @@ export class WorkerService {
      */
     const policy = await PolicyGuardrailsService.getPolicy(apt.businessId);
 
-    // Prepare line items
-    const items: Array<{ description: string; quantity: number; unitPrice: number; total: number }> = [];
+    /**
+     * Line totals are not computed here.
+     *
+     * `PricingService.quote` derives every `total` from quantity and unit price. The
+     * parts loop below used to write `part.totalCost || part.quantity * part.unitCost`,
+     * which billed a stored figure that could disagree with the quantity and price
+     * printed next to it on the same invoice line.
+     */
+    const items: PricingLineItem[] = [];
 
     const svc = apt.serviceId as any;
 
@@ -260,7 +268,6 @@ export class WorkerService {
         description: svc.name || 'HVAC Standard Diagnostics & Service',
         quantity: 1,
         unitPrice: servicePrice,
-        total: servicePrice,
       });
     } else if (svc) {
       // The service exists but carries no price. Bill the diagnostic fee, which is
@@ -269,14 +276,12 @@ export class WorkerService {
         description: svc.name || 'HVAC Standard Diagnostics & Service',
         quantity: 1,
         unitPrice: policy.diagnosticFee,
-        total: policy.diagnosticFee,
       });
     } else {
       items.push({
         description: 'Standard HVAC Diagnostic & System Repair',
         quantity: 1,
         unitPrice: policy.diagnosticFee,
-        total: policy.diagnosticFee,
       });
     }
 
@@ -287,29 +292,41 @@ export class WorkerService {
           description: `Part: ${part.partName}`,
           quantity: part.quantity,
           unitPrice: part.unitCost,
-          total: part.totalCost || part.quantity * part.unitCost,
         });
       }
     }
 
     // Add extra labor if any
     if (data.additionalLaborHours && data.additionalLaborHours > 0) {
-      const rate = data.laborRate ?? policy.laborRate;
       items.push({
         description: `Field Technician Labor (${data.additionalLaborHours} hrs)`,
         quantity: data.additionalLaborHours,
-        unitPrice: rate,
-        total: data.additionalLaborHours * rate,
+        unitPrice: data.laborRate ?? policy.laborRate,
       });
     }
 
-    // Calculate totals
-    const subtotal = items.reduce((sum, item) => sum + item.total, 0);
-    const diagCredit = data.diagnosticFeeCredit ?? policy.diagnosticFee;
-    const taxableSubtotal = Math.max(0, subtotal - diagCredit);
-    const taxRate = policy.taxRate;
-    const taxAmount = parseFloat((taxableSubtotal * taxRate).toFixed(2));
-    const totalAmount = parseFloat((taxableSubtotal + taxAmount).toFixed(2));
+    /**
+     * Same pricing engine as the dashboard and the portal.
+     *
+     * The copy that lived here read `policy.taxRate` but had previously hardcoded
+     * 8.25%, and it never billed the emergency fee — so the after-hours callout the
+     * AI quoted on the phone was invoiced as a routine visit by the very path that
+     * closes those jobs.
+     */
+    const { emergency, travelFee } = await PricingService.resolveJobContext(businessId, {
+      priority: (apt as any).priority ?? null,
+      customerId: apt.customerId,
+    });
+
+    const quote = PricingService.quote(
+      {
+        items,
+        diagnosticFeeCredit: data.diagnosticFeeCredit ?? policy.diagnosticFee,
+        emergency,
+        travelFee,
+      },
+      policy
+    );
 
     // Atomic counter, not countDocuments+1 — see DocumentNumberService.
     const invoiceNumber = await DocumentNumberService.next(apt.businessId, 'invoice');
@@ -323,14 +340,16 @@ export class WorkerService {
       appointmentId: apt._id,
       invoiceNumber,
       title: `${apt.title || 'HVAC Service'} - Completed Field Work Order`,
-      items,
-      subtotal,
-      diagnosticFeeCredit: diagCredit,
-      taxRate,
-      taxAmount,
-      totalAmount,
+      items: quote.items,
+      subtotal: quote.subtotal,
+      diagnosticFeeCredit: quote.diagnosticFeeCredit,
+      emergencyFee: quote.emergencyFee,
+      travelFee: quote.travelFee,
+      taxRate: quote.taxRate,
+      taxAmount: quote.taxAmount,
+      totalAmount: quote.totalAmount,
       amountPaid: 0,
-      balanceDue: totalAmount,
+      balanceDue: quote.totalAmount,
       status: 'unpaid',
       notes: data.notes || 'Work completed on site. Diagnostic fee credited to repair total.',
       shareToken,

@@ -134,10 +134,11 @@ Subtotal: **22.5 days** of feature work.
 - **Days 2–5 (#38)** — done, and #38 is now fully built. Email is a real channel, all six customer-facing notifications send, and the appointment-reminder spine exists. This also unblocked #39, which the plan noted could not be started on its own.
 - **#39** — roughly half done as a side effect: reminders send with a per-business lead time, quiet-hours deferral and an atomic no-double-send claim, and `confirmedByCustomerAt` is on the model. The inbound `C`/`R` parser and the reschedule-request queue remain (Days 6–7).
 - **#41** — the "6 literals in a switch" is now one templates module covering both channels, and `renderTemplate` still does not receive a `businessId`. The per-business override model and editor are untouched, so the 2-day estimate stands.
+- **Days 14–15 (#42)** — done. The duplicated arithmetic is one `PricingService`; travel fees, discounts and the never-billed `emergencyFee` all work. One line of that row's "missing" column is deliberately **not** closed: *"tax is one flat blended rate; customer state/zip never consulted"*. A per-jurisdiction tax table is a different feature from a pricing engine, and guessing a rate from a ZIP is worse than using the rate the business entered. It is recorded in the Day 24 close-out instead.
 
-**~11 days remain** of the original 24: Day 1 (defects) and Days 2–13 are done, leaving Days 14–24 — pricing rules (#42), the calendar (#14), real dispatch (#18) and close-out.
+**~9 days remain** of the original 24: Day 1 (defects), Days 2–13, Day 13½ and Days 14–15 are done, leaving Days 16–24 — the calendar (#14), real dispatch (#18) and close-out.
 
-Of the nine partial features, **seven are now complete**: #38, #39, #41, #10, #13, plus #42's and #18's prerequisites from Day 0. The two genuinely outstanding are the calendar (#14) and dispatch (#18), which is exactly the 15-day cut described below — and the reason it was the recommended one.
+Of the nine partial features, **seven are now complete**: #38, #39, #41, #10, #13 and #42, plus #18's `technicianId` prerequisite from Day 0. The two genuinely outstanding are the calendar (#14) and dispatch (#18), which is exactly the 15-day cut described below — and the reason it was the recommended one.
 
 ---
 
@@ -266,10 +267,40 @@ Fixtures are now pinned to **UTC**, which papers over a real inconsistency rathe
 
 </details>
 
-### Days 14–15 · Feature 42: pricing rules
-- **Day 14** — Extract the duplicated arithmetic into one `PricingService.quote(lineItems, policy, context)` and make all three call sites use it (`invoice.service.ts`, `estimate.service.ts`, `worker.service.ts`). Move `taxRate` and `laborRate` onto `BusinessPolicy` so `worker.service.ts` stops hardcoding `0.0825` and `95`. Bill `emergencyFee` when the appointment is flagged emergency — today the AI quotes it and it is never charged.
-- **Day 15** — Travel fee per service zone (`ServiceZone.travelFee`), applied by the zone matched from the job zip. Discounts as a first-class field (percentage or fixed, with a reason recorded) rather than a manual negative line item. Show the breakdown on the portal quote and invoice.
-  - *Verify:* a test table of inputs → expected totals, covering the diagnostic credit reducing the taxable base, the emergency fee, a travel fee and a discount together. This is money; the mutation check applies.
+### Days 14–15 · Feature 42: pricing rules — ✅ **done**
+
+`PricingService` is now the only thing in the codebase that does money. Everything below is in `backend/src/services/pricing.service.ts`, with **81 tests** in `backend/tests/money/pricing-rules.test.ts` and **68 distinct mutations attempted**: 66 caught, one guard deleted as unreachable, one survivor documented as behaviour-neutral. Suite total **497 tests across 21 files**.
+
+**What was planned and shipped**
+
+- `PricingService.quote(input, policy)` replaced the arithmetic in `invoice.service.ts`, `estimate.service.ts` (including its separate tier loop) and `worker.service.ts`. There turned out to be a **fifth** copy, in the browser — see below.
+- `emergencyFee` is billed, resolved from `appointment.priority === 'urgent'`. `BusinessPolicy.emergencyFee` had existed since the beginning, the AI was authorised to quote it on the phone, and no invoice path had ever charged it.
+- `ServiceZone.travelFee`, matched on the customer's ZIP the same way `TechnicianDispatchService.findZoneForZip` matches it, so the fee an invoice charges cannot disagree with the zone a technician was dispatched from.
+- Discounts as a real field — `discountType` / `discountValue` / `discountAmount` / `discountReason` on both models — instead of a manual negative line item.
+- Breakdown on `portal/invoice/[id]` and `portal/quote/[id]`.
+
+**Design decisions worth keeping**
+
+- **Integer cents throughout.** Float sums produce totals like `419.99999999999994`, and `toFixed(2)` at each step compounds the error rather than removing it. The tests pin this with prices chosen for their representation error: `8.29 * 100` is `828.9999999999999`, and `(2.675).toFixed(2)` is `"2.67"` where doing it in cents gives `2.68`.
+- **Order of operations is a policy decision, so it is documented and tested as one.** `subtotal → less diagnostic credit → less discount → tax → total`. The credit reduces the *taxable base* rather than paying down the total, because the customer already paid that money and was already taxed on it. The discount lands after the credit (otherwise the business hands back a percentage of money already received) and before tax (otherwise it collects tax it does not intend to remit). Two tests exist purely to distinguish these from the plausible alternatives.
+- **A tax rate above 1 is rejected, not coerced.** `8.25` and `0.0825` mean the same thing to a person; guessing would occasionally guess wrong on a real invoice.
+- **A fixed discount is capped at the bill, not rejected.** A $200 goodwill credit on a $150 job zeroes it; it does not go negative and the business does not owe tax on a negative base.
+- **Line item `total` is always recomputed.** The old code did `part.totalCost || part.quantity * part.unitCost`, so a part whose stored total disagreed with its own quantity and price billed the stored figure while printing the other two beside it.
+
+**Defects found while doing this — all pre-existing, none in scope**
+
+- **Approving an estimate tier left the old tax.** `approveEstimate` copied `items`, `subtotal` and `totalAmount` from the chosen tier and left `taxAmount` at the base items' value. So the total came from the "best" tier and the tax from the cheapest, `convertToInvoice` copied both, and the invoice's own figures did not add up to the amount demanded. Fixed by storing `discountAmount` and `taxAmount` on the tier — the only three figures that vary between tiers — and copying all of them.
+- **`convertToInvoice` dropped the fees and the discount.** An approved quote carrying a travel charge and a 10% discount became an invoice whose `travelFee` and `discountAmount` columns read `0` while the line items and the total still contained them.
+- **The estimates page posted `taxRate: 8.25`** into a field the request schema bounds at 1. Every estimate created from the dashboard was being rejected with a validation error; had it got through it would have billed 825% tax. Removed, so the business's configured rate applies.
+- **The worker PWA posted `diagnosticFeeCredit: 89` and `additionalLaborHours: 1` on every tap.** The 89 was the last surviving hardcoded price and overrode whatever the business had configured. The invented hour was worse: no technician had said they worked it, and it was billed at the labour rate on every job closed from the field.
+- **The quote page recomputed tier tax in the browser**, falling back to `0.0825` for any business that had not set a rate, and knowing nothing about the discount — so a discounted quote displayed tax on the undiscounted amount. This was the fifth copy of the arithmetic. It now renders what the server stored.
+- **`createZone` did `data.travelBufferMinutes || 30`**, silently overriding a zone deliberately configured with no buffer.
+- **`z.coerce.boolean()` was the wrong tool for `emergency`.** It turns the string `"false"` — which is what a form posts — into `true`, so an owner explicitly waiving the emergency fee would have been charged it. Replaced with an explicit union that rejects anything that is neither.
+
+**Two mutation survivors, resolved rather than left**
+
+- `Math.max(0, …)` on the taxable base was **unreachable**: `resolveDiscount` already caps a percentage at 100 and clamps a fixed amount to the base. An untestable guard on a money path is not insurance, it is a claim nobody can check, so it was removed and the cap is asserted at both of its actual boundaries instead.
+- Replacing the derived total with `Number((taxable + tax).toFixed(2))` is **genuinely behaviour-neutral**, and the reason is written into the code: the true value always sits exactly on a whole cent, so the ~1e-13 error in the float addition can never cross a rounding boundary. The derived form is kept because it needs no such argument — and that argument is what would quietly stop holding if anyone added a third addend.
 
 ### Days 16–19 · Feature 14: the calendar
 - **Day 16** — Timezone correctness and per-technician conflicts. Replace `getUTCHours()` bucketing with business-timezone rendering. Change `checkSlotConflict` to scope by technician when one is assigned, so a five-technician business can hold five concurrent jobs — today it cannot hold two. This is a behaviour change to a lock-protected path, so it needs its own concurrency test alongside the existing 5-parallel-booking one.

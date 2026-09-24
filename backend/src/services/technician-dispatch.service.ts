@@ -20,13 +20,22 @@ export class TechnicianDispatchService {
    */
   public static async createZone(
     businessId: Types.ObjectId | string,
-    data: { name: string; zipCodes: string[]; travelBufferMinutes?: number }
+    data: {
+      name: string;
+      zipCodes: string[];
+      travelBufferMinutes?: number;
+      /** Trip charge for this zone, in dollars. Billed by `PricingService`. */
+      travelFee?: number;
+    }
   ): Promise<IServiceZone> {
     return ServiceZone.create({
       businessId: new Types.ObjectId(businessId.toString()),
       name: data.name.trim(),
       zipCodes: data.zipCodes.map((z) => z.trim()),
-      travelBufferMinutes: data.travelBufferMinutes || 30,
+      // `?? 30`, not `|| 30`: a zone deliberately configured with no travel buffer
+      // was silently given a 30-minute one.
+      travelBufferMinutes: data.travelBufferMinutes ?? 30,
+      travelFee: data.travelFee ?? 0,
     });
   }
 

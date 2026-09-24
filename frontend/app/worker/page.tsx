@@ -245,14 +245,27 @@ export default function WorkerPWAPage() {
 
     setActionLoading(true);
     try {
-      const result = await WorkerService.completeJobAndGenerateInvoice(activeJob._id, {
-        diagnosticFeeCredit: 89,
-        additionalLaborHours: 1,
-      });
+      /**
+       * Nothing is invented here.
+       *
+       * This posted `diagnosticFeeCredit: 89` and `additionalLaborHours: 1` on every
+       * tap. The 89 was the last literal left over from the hardcoded pricing, and it
+       * overrode whatever the business had actually configured. The extra hour was
+       * worse: no technician had said they worked it, and it was billed at the labour
+       * rate on every job closed from the field.
+       *
+       * Sending neither means the credit comes from the business's own policy and the
+       * customer is billed for the work that was recorded.
+       */
+      const result = await WorkerService.completeJobAndGenerateInvoice(activeJob._id, {});
       setActiveJob(result.appointment);
       setJobs((prev) => prev.map((j) => (j._id === result.appointment._id ? result.appointment : j)));
       setGeneratedInvoice(result.invoice);
-      toast.success('Work Complete & Invoiced!', '1-Tap customer invoice created with $89 diagnostic fee deduction.');
+      toast.success(
+        'Work Complete & Invoiced!',
+        // The actual figure off the invoice, not a hardcoded "$89" that could disagree.
+        `Customer invoice created for $${(result.invoice?.totalAmount ?? 0).toFixed(2)}.`
+      );
     } catch (err: any) {
       triggerHaptic([100, 50, 100]);
       toast.error('Completion Failed', err.message || 'Failed to complete job.');

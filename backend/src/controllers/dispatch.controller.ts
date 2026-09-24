@@ -27,7 +27,7 @@ export class DispatchController {
     try {
       if (!req.user) throw new AppError('Authentication required', 401);
       const businessId = await DispatchController.getBusinessId(req.user.id);
-      const { name, zipCodes, travelBufferMinutes } = req.body;
+      const { name, zipCodes, travelBufferMinutes, travelFee } = req.body;
 
       if (!name || !zipCodes || !Array.isArray(zipCodes)) {
         throw new AppError('name and zipCodes array are required', 400);
@@ -37,6 +37,7 @@ export class DispatchController {
         name,
         zipCodes,
         travelBufferMinutes,
+        travelFee,
       });
 
       sendSuccess(res, { success: true, zone, message: 'Service zone created successfully' }, 201);

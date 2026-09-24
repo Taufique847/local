@@ -21,6 +21,15 @@ export interface IInvoice extends Document {
   items: IInvoiceItem[];
   subtotal: number;
   diagnosticFeeCredit: number;
+  /** Emergency/after-hours callout charge. 0 when not an emergency job. */
+  emergencyFee: number;
+  /** Trip charge from the service zone matching the job zip. 0 when none applies. */
+  travelFee: number;
+  discountType?: 'percentage' | 'fixed';
+  discountValue: number;
+  discountAmount: number;
+  /** Why the discount was given. A discount nobody can explain later is a write-off. */
+  discountReason?: string;
   taxRate: number;
   taxAmount: number;
   totalAmount: number;
@@ -109,6 +118,38 @@ const invoiceSchema = new Schema<IInvoice>(
     diagnosticFeeCredit: {
       type: Number,
       default: 0,
+    },
+    /**
+     * Emergency and travel fees are stored alongside the line items that represent
+     * them, not instead of them. The line item is what the customer reads; these
+     * fields are what a report can sum without parsing descriptions.
+     */
+    emergencyFee: {
+      type: Number,
+      default: 0,
+    },
+    travelFee: {
+      type: Number,
+      default: 0,
+    },
+    discountType: {
+      type: String,
+      enum: ['percentage', 'fixed'],
+    },
+    /** The percentage or dollar figure as entered, kept for the audit trail. */
+    discountValue: {
+      type: Number,
+      default: 0,
+    },
+    /** The dollars actually taken off, after the percentage is applied or the cap hit. */
+    discountAmount: {
+      type: Number,
+      default: 0,
+    },
+    discountReason: {
+      type: String,
+      trim: true,
+      maxlength: 200,
     },
     taxRate: {
       type: Number,

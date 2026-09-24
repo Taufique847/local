@@ -1,6 +1,6 @@
 # BlueCollar AI — Final Feature Status
 
-> **Verified:** 23 September 2026, by reading `backend/src` and `frontend/app` directly, by running the built server against a live database, and by a 416-test automated suite whose guards were each confirmed by deliberately breaking them.
+> **Verified:** 23 September 2026, by reading `backend/src` and `frontend/app` directly, by running the built server against a live database, and by a 497-test automated suite whose guards were each confirmed by deliberately breaking them.
 >
 > Reference vision: `targetFeaturesIdea.md` (86 numbered features, sections A–J).
 > This file supersedes the status sections of `PROJECT_STATUS_AND_ROADMAP.md`, which was written before the Week 1–4 hardening, Tier 1/Tier 2 work and QA bug fixes landed.
@@ -11,10 +11,10 @@
 
 | Measure | Value |
 |---|---|
-| Features **fully built and verified** | **37 of 86** (~43%) |
-| Features **partially built** (usable but incomplete) | **4 of 86** (~5%) |
+| Features **fully built and verified** | **38 of 86** (~44%) |
+| Features **partially built** (usable but incomplete) | **3 of 86** (~3%) |
 | Features **not started** | **45 of 86** (~52%) |
-| Weighted completion against the full vision | **~45%** (built = 1, partial = 0.5 → 37 + 2 = 39 of 86) |
+| Weighted completion against the full vision | **~46%** (built = 1, partial = 0.5 → 38 + 1.5 = 39.5 of 86) |
 | Completion against a **launchable MVP** (§7 of the vision doc) | **~90%** |
 
 Two different questions, two different answers:
@@ -95,7 +95,7 @@ Each row was confirmed in code, and where marked ✓runtime, exercised against a
 
 | # | Feature | Status | Notes |
 |---|---|---|---|
-| 42 | Pricing engine | 🟡 Partial | Fixed price, hourly labour, parts, tax, diagnostic credit, emergency fee. No travel fee or discount rules. |
+| 42 | Pricing engine | ✅ Built | One `PricingService` computing in integer cents: fixed price, hourly labour, parts, per-zone travel fee, percentage/fixed discounts with a recorded reason, diagnostic credit against the taxable base, and the emergency fee that was quoted and never billed. The arithmetic previously existed in **five** places and had drifted; it now exists in one. Tax is still the single rate a business configures — a per-jurisdiction table is a separate feature, listed in §5. 81 tests, 66/68 mutations caught. |
 | 43 | Worker final pricing | ✅ Built | Technician enters hours/parts; invoice generated on completion (now idempotent). |
 | 44 | Digital invoices | ✅ Built | Line items, tax, balance, partial payment, aging. Numbers now allocated atomically. ✓runtime |
 | 45 | Stripe online checkout | ✅ Built | Real Checkout session from the portal. The previous fake card form was deleted. |
@@ -129,7 +129,7 @@ Each row was confirmed in code, and where marked ✓runtime, exercised against a
 | Password reset by email, single-use, revokes all sessions | ✅ Built ✓tested (send path unexercised) |
 | Staff invitations — email link, single use, tenant-bound | ✅ Built ✓tested (send path unexercised) |
 | Media-stream WebSocket authorization (single-use signed token) | ✅ Built ✓tested |
-| Automated test suite — 416 tests over tenancy, money, auth, pricing, notifications and segments | ✅ Built, wired into CI |
+| Automated test suite — 497 tests over tenancy, money, auth, pricing, notifications and segments | ✅ Built, wired into CI |
 | Data retention sweep + per-customer data erasure | ✅ Built |
 | AI/recording disclosure spoken before the assistant answers | ✅ Built |
 | Docker, compose, CI (typecheck/build/secrets/image) | ✅ Built |
@@ -150,9 +150,11 @@ Each row was confirmed in code, and where marked ✓runtime, exercised against a
 | A2 | **Password reset flow** | ✅ Done | There was no recovery path at all — a forgotten password meant permanent lockout. | — |
 | A3 | **Commit the work** | ✅ Done | Committed in four logical commits on `feat/staff-accounts-rbac-and-tests` and pushed. Verified no `.env`, key material or temp file entered any commit. | — |
 | ~~A4~~ | ~~**Rotate the leaked credential**~~ | ❌ **Withdrawn — was never true** | See below. | — |
-| A5 | **Tests for the money and tenancy paths** | ✅ Done | The QA pass found a critical cross-tenant hole precisely because nothing guarded these. 416 tests now cover worker tenant + per-technician scoping, portal share tokens, Stripe and Twilio webhook signatures, RBAC, password reset, invitations, the media-stream token, job-completion pricing, SMS consent, notification templates, equipment and property data, and segment campaigns. | — |
+| A5 | **Tests for the money and tenancy paths** | ✅ Done | The QA pass found a critical cross-tenant hole precisely because nothing guarded these. 497 tests now cover worker tenant + per-technician scoping, portal share tokens, Stripe and Twilio webhook signatures, RBAC, password reset, invitations, the media-stream token, job-completion pricing, SMS consent, notification templates, equipment and property data, and segment campaigns. | — |
 
 **On defects found since.** Writing `partial.md` — a day-by-day plan to finish the nine partial features — required reading all nine at model, service, controller and page level. That read turned up **seven defects in shipped code**, all now fixed with tests and mutation checks. Four shared one root cause worth naming: code reading or writing a field that does not exist on the schema, which Mongoose silently tolerates in both directions. The worst of them meant a customer who texted STOP kept receiving messages. Details in `partial.md` §2.
+
+Building the features then turned up **sixteen more**, which is the more useful number: the planning read found what was obviously wrong, and actually touching the code found what was quietly wrong. Seven came from the pricing work alone — a dashboard page posting a tax *percentage* into a field bounded at 1, so every estimate created from it was rejected; a field-app button inventing an hour of labour on every job it closed; an estimate tier carrying its own total but the previous tier's tax. None of these threw, none logged, and every one of them was a number on a customer's bill.
 
 **On A5 — what the tests are actually worth.** Passing tests prove nothing on their own, so each guard was deliberately broken and the suite re-run to confirm it fails. Seven mutations were tried (dropping `businessId` from the appointment filter, honouring a caller-supplied `technicianId` on writes, removing the billing owner gate, disabling Twilio signature checks, re-allowing an ObjectId as a portal share token, making password reset reveal whether an email is registered, and skipping the stream token's signature comparison). Six were caught immediately. The seventh was not, which exposed a real coverage gap — a technician naming a colleague via query parameter on a *mutation* — and a test was added for it. All seven are now caught.
 
@@ -226,6 +228,7 @@ Worth knowing before a demo, because each one reads as finished in the UI.
 | **Customer equipment badge** | ~~Every customer row showed "Carrier 4T Split (410A)" or "Carrier 10T RTU", chosen from a property type that was itself never persisted.~~ **Removed.** No equipment is recorded anywhere in the product; that model is Day 10 in `partial.md`. |
 | **Technician logins** | ~~Technicians are records, not users.~~ **Fixed.** Technicians can now hold their own accounts, linked to a dispatch record, and the field app scopes to their own jobs. One gap remains: `frontend/app/worker/page.tsx` still has no client-side auth guard, so an unauthenticated visitor gets a page that renders and then fails its API calls. The data is safe — every `/api/worker/*` route is behind authentication — but the page should redirect rather than break. |
 | **Voice at scale** | `VoiceStreamHandler` and `VoiceSessionService` hold sessions in in-process `Map`s, so voice works on exactly one instance. The cron scheduler is now multi-replica safe; voice is not. |
+| **Sales tax by jurisdiction** | One rate per business, entered by the owner. A contractor crossing a city or county line is charging the wrong rate, and nothing in the product knows it. Deliberately not solved alongside the pricing engine: a ZIP is not a tax jurisdiction, so deriving a rate from one would replace a number the owner chose with a number the product guessed. Needs a real rate source. |
 
 ---
 
@@ -251,7 +254,8 @@ Worth knowing before a demo, because each one reads as finished in the UI.
 | Job-completion pricing | Automated — a $450 service bills 450, per-business tax and labour rates, diagnostic credit against the taxable base |
 | Technician assignment | Automated through the real booking path — cross-tenant and inactive technicians refused, name derived from the record |
 | SMS consent | Automated — STOP persists and blocks sending, START restores, no duplicate booking from a consent reply |
-| **Automated tests** | ✅ 416 tests, 20 files, in CI. Mutation-checked: **165 deliberate regressions attempted, 164 caught** (27 on staff accounts/RBAC, 24 on Days 2–5, 90 on Days 6–13, 24 on email consent — per-group breakdown in `partial.md`). The single survivor is a redundant tenant clause whose load-bearing twin *was* caught, verified behaviour-neutral and documented in place. Separately, two pieces of code were found to be **unreachable** and deleted rather than left implying checks that could never fire |
+| Pricing rules | Automated — a table of inputs to exact expected totals, the order of operations distinguished from its plausible alternatives, prices chosen for their floating-point representation error, per-zone travel fees and discounts, and cross-tenant reads of the appointment priority and the customer ZIP refused |
+| **Automated tests** | ✅ 497 tests, 21 files, in CI. Mutation-checked: **233 deliberate regressions attempted, 230 caught** (27 on staff accounts/RBAC, 24 on Days 2–5, 90 on Days 6–13, 24 on email consent, 68 on pricing — per-group breakdown in `partial.md`). Two survivors, both verified behaviour-neutral and documented in place: a redundant tenant clause whose load-bearing twin *was* caught, and a total rounded in dollars rather than derived in cents, which is equivalent only because of an argument about floating-point ulps that the code explains and declines to depend on. Separately, three pieces of code were found to be **unreachable** and deleted rather than left implying checks that could never fire |
 | **Voice pipeline end to end** | ❌ Never — no provider keys |
 | **Email delivery** | ❌ Never — no `EMAIL_API_KEY`. Reset and invite flows are tested with the sender stubbed, so the token lifecycle is proven and the Resend call is not |
 | **Live card payment** | ❌ Never — Stripe in simulation mode |

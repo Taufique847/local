@@ -28,8 +28,12 @@
 > ('owner' | 'dispatcher' | 'technician') for tenant endpoints - both read from the database per
 > request rather than trusted from the token.
 >
-> **Sixteen further defects were found and fixed after this session**, none of them by this report:
-> seven during a planning read of the nine partial features, and nine more while building them.
+> **Twenty-three further defects were found and fixed after this session**, none of them by this
+> report: seven during a planning read of the nine partial features, and sixteen more while
+> building them. Seven of those sixteen surfaced only while consolidating the pricing arithmetic —
+> including a dashboard page that posted a tax *percentage* into a field bounded at 1, so every
+> estimate created from it was being rejected outright, and a field-app button that invented an
+> hour of labour on every job it closed.
 > The ones worth knowing about, because they were all invisible rather than noisy:
 >
 > - Field-app invoices read `svc.price` on a model whose price field is `startingPrice`, so **every

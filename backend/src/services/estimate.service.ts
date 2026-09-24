@@ -6,6 +6,7 @@ import { Business } from '../models/business.model';
 import { DocumentNumberService } from './document-number.service';
 import { PolicyGuardrailsService } from './policy-guardrails.service';
 import { NotificationService } from './notification.service';
+import { PricingService, PricingDiscount } from './pricing.service';
 import { AppError } from '../types';
 import { generateShareToken, isValidShareTokenFormat } from '../utils/share-token';
 
@@ -20,6 +21,12 @@ export class EstimateService {
       items: IEstimateItem[];
       diagnosticFeeCredit?: number;
       taxRate?: number;
+      /** Overrides the appointment's priority. Lets an owner charge or waive it. */
+      emergency?: boolean;
+      emergencyFee?: number;
+      /** Overrides the zone lookup. */
+      travelFee?: number;
+      discount?: PricingDiscount;
       terms?: string;
       tiers?: any[];
     }
@@ -31,34 +38,49 @@ export class EstimateService {
     const estimateNumber = await DocumentNumberService.next(businessId, 'estimate');
     const shareToken = generateShareToken('est');
 
-    // Calculations
-    const subtotal = data.items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
-    const diagCredit = data.diagnosticFeeCredit ?? 0;
-    const taxableSubtotal = Math.max(0, subtotal - diagCredit);
-    // Falls back to the business's own rate rather than an 8.25% literal.
+    // All arithmetic lives in `PricingService`. See InvoiceService.createInvoice.
     const policy = await PolicyGuardrailsService.getPolicy(businessId);
-    const taxRate = data.taxRate ?? policy.taxRate;
-    const taxAmount = parseFloat((taxableSubtotal * taxRate).toFixed(2));
-    const totalAmount = parseFloat((taxableSubtotal + taxAmount).toFixed(2));
+
+    const { emergency, travelFee } = await PricingService.resolveJobContext(businessId, {
+      appointmentId: data.appointmentId || null,
+      zip: (customer as any).address?.zip ?? null,
+      emergency: data.emergency,
+      travelFee: data.travelFee,
+    });
+
+    /**
+     * The fees, credit and discount belong to the job, so every tier carries them.
+     *
+     * A customer who picks the "best" option is still in the same house on the same
+     * after-hours callout. Pricing each tier through the same `quote` call means the
+     * comparison table cannot show one option with the travel charge and another
+     * without it, and a percentage discount is correctly recomputed against each
+     * tier's own base rather than being copied from the cheapest one.
+     */
+    const jobPricing = {
+      diagnosticFeeCredit: data.diagnosticFeeCredit,
+      taxRate: data.taxRate,
+      emergency,
+      emergencyFee: data.emergencyFee,
+      travelFee,
+      discount: data.discount,
+    };
+
+    const quote = PricingService.quote({ ...jobPricing, items: data.items }, policy);
 
     const processedTiers = data.tiers && data.tiers.length > 0
       ? data.tiers.map((t: any) => {
-          const tSubtotal = t.items.reduce((s: number, it: any) => s + it.quantity * it.unitPrice, 0);
-          const tTaxable = Math.max(0, tSubtotal - diagCredit);
-          const tTax = parseFloat((tTaxable * taxRate).toFixed(2));
+          const tierQuote = PricingService.quote({ ...jobPricing, items: t.items ?? [] }, policy);
           return {
             tierId: t.tierId,
             name: t.name,
             badge: t.badge,
             description: t.description,
-            items: t.items.map((it: any) => ({
-              description: it.description,
-              quantity: it.quantity,
-              unitPrice: it.unitPrice,
-              total: parseFloat((it.quantity * it.unitPrice).toFixed(2)),
-            })),
-            subtotal: tSubtotal,
-            totalAmount: parseFloat((tTaxable + tTax).toFixed(2)),
+            items: tierQuote.items,
+            subtotal: tierQuote.subtotal,
+            discountAmount: tierQuote.discountAmount,
+            taxAmount: tierQuote.taxAmount,
+            totalAmount: tierQuote.totalAmount,
             isRecommended: !!t.isRecommended,
           };
         })
@@ -71,18 +93,19 @@ export class EstimateService {
       leadId: data.leadId || null,
       estimateNumber,
       title: data.title || 'HVAC Service & Diagnostic Estimate',
-      items: data.items.map((i) => ({
-        description: i.description,
-        quantity: i.quantity,
-        unitPrice: i.unitPrice,
-        total: parseFloat((i.quantity * i.unitPrice).toFixed(2)),
-      })),
+      items: quote.items,
       tiers: processedTiers,
-      subtotal,
-      diagnosticFeeCredit: diagCredit,
-      taxRate,
-      taxAmount,
-      totalAmount,
+      subtotal: quote.subtotal,
+      diagnosticFeeCredit: quote.diagnosticFeeCredit,
+      emergencyFee: quote.emergencyFee,
+      travelFee: quote.travelFee,
+      discountType: quote.discountType,
+      discountValue: quote.discountValue,
+      discountAmount: quote.discountAmount,
+      discountReason: quote.discountReason,
+      taxRate: quote.taxRate,
+      taxAmount: quote.taxAmount,
+      totalAmount: quote.totalAmount,
       terms: data.terms,
       status: 'sent',
       shareToken,
@@ -260,9 +283,20 @@ export class EstimateService {
     if (signature.selectedTierId && estimate.tiers && estimate.tiers.length > 0) {
       const chosenTier = estimate.tiers.find((t) => t.tierId === signature.selectedTierId);
       if (chosenTier) {
+        /**
+         * Every figure the tier changes, not just two of them.
+         *
+         * This used to copy `items`, `subtotal` and `totalAmount` and leave
+         * `taxAmount` and `discountAmount` at the base items' values. So approving
+         * the "best" tier produced an estimate whose total came from that tier and
+         * whose tax came from the cheapest one, `convertToInvoice` copied both, and
+         * the invoice's line items did not add up to the amount being demanded.
+         */
         estimate.selectedTierId = chosenTier.tierId;
         estimate.items = chosenTier.items;
         estimate.subtotal = chosenTier.subtotal;
+        estimate.discountAmount = chosenTier.discountAmount;
+        estimate.taxAmount = chosenTier.taxAmount;
         estimate.totalAmount = chosenTier.totalAmount;
       }
     }
@@ -323,6 +357,21 @@ export class EstimateService {
       items: estimate.items,
       subtotal: estimate.subtotal,
       diagnosticFeeCredit: estimate.diagnosticFeeCredit,
+      /**
+       * The fees and the discount carry over.
+       *
+       * Without these, an approved quote that included a travel charge and a 10%
+       * discount converted into an invoice whose `travelFee` and `discountAmount`
+       * read 0 while the line items and the total still contained them — so every
+       * report that sums those columns understated them, and nothing on the invoice
+       * explained why the customer was paying less than the items came to.
+       */
+      emergencyFee: estimate.emergencyFee,
+      travelFee: estimate.travelFee,
+      discountType: estimate.discountType,
+      discountValue: estimate.discountValue,
+      discountAmount: estimate.discountAmount,
+      discountReason: estimate.discountReason,
       taxRate: estimate.taxRate,
       taxAmount: estimate.taxAmount,
       totalAmount: estimate.totalAmount,

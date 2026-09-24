@@ -215,7 +215,14 @@ export default function EstimatesPage() {
         items,
         tiers: tiersPayload,
         diagnosticFeeCredit: diagCredit,
-        taxRate: 8.25,
+        /**
+         * No `taxRate` is sent, so the business's own configured rate applies.
+         *
+         * This used to post `taxRate: 8.25`, meaning 8.25%, into a field that is a
+         * fraction — `0.0825`. The request schema bounds it at 1, so every estimate
+         * created from this page was rejected with a validation error. Had it got
+         * through, it would have billed 825% tax.
+         */
       });
       toast.success('Estimate Created!', isTiered ? '3-Option proposal (Good/Better/Best) generated.' : 'Digital proposal created.');
       setCreateModalOpen(false);

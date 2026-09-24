@@ -108,6 +108,43 @@ export const lineItemSchema = z.object({
   unitPrice: z.coerce.number().min(0, 'Unit price cannot be negative').max(1_000_000),
 });
 
+/**
+ * A discount as entered by the owner.
+ *
+ * `value` is bounded here only loosely because its meaning depends on `type` —
+ * `PricingService` rejects a percentage above 100 and caps a fixed amount at the
+ * bill, which it can do because it is the only thing that knows the bill.
+ *
+ * `reason` is not required by this schema, but it is stored when given: a discount
+ * nobody can explain three months later is indistinguishable from a write-off.
+ */
+export const discountSchema = z.object({
+  type: z.enum(['percentage', 'fixed']),
+  value: z.coerce.number().min(0, 'Discount cannot be negative').max(1_000_000),
+  reason: trimmed(200).optional(),
+});
+
+/**
+ * `emergency` and `travelFee` are optional overrides, not the normal path.
+ *
+ * Left unset, the emergency fee follows the appointment's `priority` and the travel
+ * fee comes from the service zone matching the customer's ZIP. They are accepted here
+ * so an owner raising an invoice by hand can charge or waive either one.
+ */
+const jobFeeOverrides = {
+  /**
+   * Not `z.coerce.boolean()`. That coerces the *string* `"false"` — which is what a
+   * form posts — to `true`, so an owner explicitly waiving the emergency fee would
+   * have been charged it.
+   */
+  emergency: z
+    .union([z.boolean(), z.enum(['true', 'false']).transform((v) => v === 'true')])
+    .optional(),
+  emergencyFee: z.coerce.number().min(0).max(100_000).optional(),
+  travelFee: z.coerce.number().min(0).max(10_000).optional(),
+  discount: discountSchema.optional(),
+};
+
 export const createInvoiceSchema = z.object({
   customerId: objectId,
   appointmentId: objectId.optional(),
@@ -116,6 +153,7 @@ export const createInvoiceSchema = z.object({
   items: z.array(lineItemSchema).min(1, 'Add at least one line item'),
   diagnosticFeeCredit: z.coerce.number().min(0).max(100_000).optional(),
   taxRate: z.coerce.number().min(0).max(1).optional(),
+  ...jobFeeOverrides,
   dueDate: z.coerce.date().optional(),
   notes: trimmed(2000).optional(),
 });
@@ -144,6 +182,7 @@ export const createEstimateSchema = z.object({
   tiers: z.array(estimateTierSchema).max(3).optional(),
   diagnosticFeeCredit: z.coerce.number().min(0).max(100_000).optional(),
   taxRate: z.coerce.number().min(0).max(1).optional(),
+  ...jobFeeOverrides,
   terms: trimmed(4000).optional(),
 });
 
@@ -253,6 +292,11 @@ export const serviceZoneSchema = z.object({
     .min(1, 'Add at least one ZIP code')
     .max(500),
   travelBufferMinutes: z.coerce.number().min(0).max(240).default(30),
+  /**
+   * Trip charge for jobs in this zone, in dollars. Bounds mirror the model.
+   * Defaults to 0 so a business that charges the same everywhere configures nothing.
+   */
+  travelFee: z.coerce.number().min(0).max(10_000).optional(),
   assignedTechnicianIds: z.array(objectId).max(200).optional(),
   active: z.boolean().optional(),
 });
