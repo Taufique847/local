@@ -8,6 +8,7 @@ import { Technician } from '../models/technician.model';
 import { AvailabilityService } from './availability.service';
 import { NotificationService } from './notification.service';
 import { LockService, LockAcquisitionError } from './lock.service';
+import { zonedDayBounds, zonedDateKey, formatDateTimeInZone } from '../utils/format';
 import {
   CreateAppointmentInput,
   UpdateAppointmentInput,
@@ -203,23 +204,35 @@ export class AppointmentService {
       throw new AppError(hoursCheck.reason || 'That time is outside your opening hours.', 409);
     }
 
-    // Double-booking conflict check
-    const hasConflict = await AvailabilityService.checkSlotConflict(businessId, startAt, endAt);
-    if (hasConflict) {
-      throw new AppError('This time slot is already booked. Please choose another time.', 409);
-    }
-
-    const title = `${service.name} - ${customer.firstName} ${customer.lastName}`.trim();
-    const timezone = business.timezone || 'America/New_York';
-    const address = input.address || customer.address;
-
-    // Writes technicianId, which nothing did before. Without it every job stayed
-    // unassigned and the field app could not scope to one person's work.
+    /**
+     * The technician is resolved *before* the conflict check, not after.
+     *
+     * The order matters now that a conflict means "this person is busy" rather than
+     * "somebody is busy". Checking first and assigning second would have asked the
+     * capacity question for a job that already had a named owner, so booking a
+     * second technician into the same hour would still have been refused — the exact
+     * limitation this change exists to remove.
+     */
     const assignment = await AppointmentService.resolveTechnician(
       businessId,
       input.technicianId,
       input.technicianName
     );
+
+    const conflict = await AvailabilityService.checkSlotConflictDetailed(businessId, startAt, endAt, {
+      technicianId: assignment?.technicianId ?? null,
+    });
+
+    if (conflict.conflict) {
+      throw new AppError(
+        conflict.reason || 'This time slot is already booked. Please choose another time.',
+        409
+      );
+    }
+
+    const title = `${service.name} - ${customer.firstName} ${customer.lastName}`.trim();
+    const timezone = business.timezone || 'America/New_York';
+    const address = input.address || customer.address;
 
     const appointment = await Appointment.create({
       businessId,
@@ -254,7 +267,10 @@ export class AppointmentService {
           $push: {
             activities: {
               type: 'appointment_scheduled',
-              description: `Appointment scheduled for ${startAt.toLocaleString()}`,
+              // `toLocaleString()` with no zone rendered this in whatever zone the
+              // *server* runs in, so on a UTC host a 2:30 PM Dallas job was recorded
+              // on the lead's timeline as 7:30 PM.
+              description: `Appointment scheduled for ${formatDateTimeInZone(startAt, timezone)}`,
               createdAt: new Date(),
               createdBy,
               metadata: { appointmentId: appointment._id },
@@ -348,16 +364,50 @@ export class AppointmentService {
       throw new AppError(hours.reason || 'That time is outside your opening hours.', 409);
     }
 
-    // Check conflict excluding this appointment
-    const hasConflict = await AvailabilityService.checkSlotConflict(
+    /**
+     * The booking horizon, which this path also never checked.
+     *
+     * Minimum notice is deliberately *not* enforced here while the horizon is. They
+     * guard different things. Notice protects the business from being surprised by a
+     * job it has no time to prepare for — but an owner dragging a card on their own
+     * calendar is not a surprise, and a customer-requested move to later today is
+     * usually the outcome everyone wants. The horizon has no such reading: a job
+     * moved five years out is a mistake or a typo whoever made it, and it silently
+     * disappears from every list that looks at the next month.
+     */
+    const { PolicyGuardrailsService } = await import('./policy-guardrails.service');
+    const policy = await PolicyGuardrailsService.getPolicy(businessId);
+    const horizonMs = policy.maxBookingHorizonDays * 24 * 60 * 60 * 1000;
+
+    if (newStartAt.getTime() > Date.now() + horizonMs) {
+      throw new AppError(
+        `Appointments can only be scheduled up to ${policy.maxBookingHorizonDays} days in advance.`,
+        409
+      );
+    }
+
+    /**
+     * Conflict against the assigned technician's own diary.
+     *
+     * Was business-wide, so moving a job into an hour where a *colleague* was working
+     * was refused. A reschedule cannot change the assignment, so the person to ask
+     * about is whoever already holds it.
+     */
+    const conflict = await AvailabilityService.checkSlotConflictDetailed(
       businessId,
       newStartAt,
       newEndAt,
-      appointment._id
+      {
+        excludeAppointmentId: appointment._id,
+        technicianId: appointment.technicianId ?? null,
+      }
     );
 
-    if (hasConflict) {
-      throw new AppError('The requested reschedule time slot is already booked.', 409);
+    if (conflict.conflict) {
+      throw new AppError(
+        conflict.reason || 'The requested reschedule time slot is already booked.',
+        409
+      );
     }
 
     // Record reschedule history
@@ -385,7 +435,12 @@ export class AppointmentService {
           $push: {
             activities: {
               type: 'note',
-              description: `Appointment rescheduled to ${newStartAt.toLocaleString()}${input.reason ? ` (${input.reason})` : ''}`,
+              // The appointment's own stored timezone, not the server's. See the
+              // matching note on the create path.
+              description: `Appointment rescheduled to ${formatDateTimeInZone(
+                newStartAt,
+                appointment.timezone
+              )}${input.reason ? ` (${input.reason})` : ''}`,
               createdAt: new Date(),
               createdBy: input.changedBy || 'scheduling_engine',
             },
@@ -503,13 +558,20 @@ export class AppointmentService {
       query.technicianName = new RegExp(filter.technicianName, 'i');
     }
 
-    // Specific day filter: YYYY-MM-DD
+    /**
+     * Specific day filter: YYYY-MM-DD, in the business's timezone.
+     *
+     * This built a UTC midnight-to-midnight window, which for a Dallas business runs
+     * 19:00 the previous evening to 19:00. An 8 PM job appeared on the next day's
+     * schedule and a 6 AM job was missing from its own — on the page the dispatcher
+     * uses to see what is happening today.
+     */
     if (filter.date) {
-      const [year, month, day] = filter.date.split('-').map(Number);
-      if (year && month && day) {
-        const startOfDay = new Date(Date.UTC(year, month - 1, day, 0, 0, 0));
-        const endOfDay = new Date(Date.UTC(year, month - 1, day, 23, 59, 59, 999));
-        query.startAt = { $gte: startOfDay, $lte: endOfDay };
+      const bounds = zonedDayBounds(filter.date, await AppointmentService.timezoneFor(businessId));
+      if (bounds) {
+        // `$lt` on the end, not `$lte`: the window is half-open, so a job at exactly
+        // local midnight belongs to the day it starts and not to both days.
+        query.startAt = { $gte: bounds.start, $lt: bounds.end };
       }
     } else if (filter.from || filter.to) {
       query.startAt = {};
@@ -710,19 +772,33 @@ export class AppointmentService {
   }
 
   /**
-   * Get today's appointments.
+   * The business's timezone, defaulted the same way every other caller defaults it.
+   *
+   * A tiny lookup rather than threading the timezone through every filter signature,
+   * because the alternative — each query deciding for itself what "today" means — is
+   * how the UTC-day bug got into three separate places.
+   */
+  private static async timezoneFor(businessId: Types.ObjectId | string): Promise<string> {
+    const business = await Business.findById(businessId).select('timezone').lean();
+    return business?.timezone || 'America/New_York';
+  }
+
+  /**
+   * Get today's appointments — today where the business is, not today in Greenwich.
+   *
+   * Built its window from `now.getUTCDate()`, so for any business west of Greenwich
+   * the evening's jobs were already on tomorrow's list.
    */
   static async getTodayAppointments(
     businessId: Types.ObjectId | string
   ): Promise<IAppointment[]> {
-    const now = new Date();
-    const startOfDay = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0));
-    const endOfDay = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 59, 59, 999));
+    const timezone = await AppointmentService.timezoneFor(businessId);
+    const bounds = zonedDayBounds(zonedDateKey(new Date(), timezone), timezone);
 
     return Appointment.find({
       businessId,
       status: { $nin: ['cancelled', 'no_show'] },
-      startAt: { $gte: startOfDay, $lte: endOfDay },
+      ...(bounds ? { startAt: { $gte: bounds.start, $lt: bounds.end } } : {}),
     })
       .sort({ startAt: 1 })
       .populate('customerId', 'firstName lastName phone email address')

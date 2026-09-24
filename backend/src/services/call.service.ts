@@ -17,6 +17,7 @@ import { BillingService } from './billing.service';
 import { RealtimeVoiceProvider } from './voice/realtime-voice-provider.service';
 import { config } from '../config/env';
 import { logger } from '../utils/logger';
+import { zonedDayBounds } from '../utils/format';
 
 export class CallService {
   /** Test calls allowed per business per rolling hour. */
@@ -49,12 +50,17 @@ export class CallService {
       query.customerId = filter.customerId;
     }
 
+    /**
+     * A day of calls, in the business's timezone.
+     *
+     * Was a UTC midnight-to-midnight window, so for a Dallas business the "today"
+     * filter showed calls from 19:00 the previous evening and hid the evening's own.
+     */
     if (filter.date) {
-      const [year, month, day] = filter.date.split('-').map(Number);
-      if (year && month && day) {
-        const start = new Date(Date.UTC(year, month - 1, day, 0, 0, 0));
-        const end = new Date(Date.UTC(year, month - 1, day, 23, 59, 59, 999));
-        query.startedAt = { $gte: start, $lte: end };
+      const business = await Business.findById(businessId).select('timezone').lean();
+      const bounds = zonedDayBounds(filter.date, business?.timezone || 'America/New_York');
+      if (bounds) {
+        query.startedAt = { $gte: bounds.start, $lt: bounds.end };
       }
     }
 

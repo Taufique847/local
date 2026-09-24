@@ -2,33 +2,120 @@ import { Types } from 'mongoose';
 import { Business } from '../models/business.model';
 import { Service } from '../models/service.model';
 import { Appointment } from '../models/appointment.model';
+import { Technician } from '../models/technician.model';
 import { TimeSlot } from '../types/appointment.types';
-import { zonedParts, parseTimeOfDay } from '../utils/format';
+import { zonedParts, parseTimeOfDay, zonedWallClockToUtc } from '../utils/format';
 import { AppError } from '../types';
+
+/** Statuses that do not occupy a technician's time. */
+const LIVE_STATUSES = { $nin: ['cancelled', 'no_show'] };
+
+export interface SlotConflictOptions {
+  /** Excluded from the overlap check — the appointment being rescheduled. */
+  excludeAppointmentId?: Types.ObjectId | string | null;
+  /**
+   * The technician the job is assigned to. When given, only that person's diary is
+   * consulted. When absent, the business's total capacity is.
+   */
+  technicianId?: Types.ObjectId | string | null;
+}
+
+export interface SlotConflictResult {
+  conflict: boolean;
+  reason?: string;
+}
 
 export class AvailabilityService {
   /**
-   * Check if an appointment overlaps with existing non-cancelled appointments.
+   * Whether a time window can actually be served.
+   *
+   * This used to be a single business-wide overlap query: if *any* appointment
+   * overlapped, the slot was taken. A five-technician company could therefore hold
+   * exactly one job at a time — assigning different people to different addresses
+   * made no difference, because nothing in this path read `technicianId`. For a
+   * business with a crew, the product's core scheduling rule was wrong.
+   *
+   * Two cases now, because they are genuinely different questions:
+   *
+   *  - **A job assigned to someone** asks "is this person free?". Only their diary
+   *    matters; four colleagues being busy is irrelevant.
+   *  - **An unassigned job** asks "is there anyone left?". Nobody is named yet, so
+   *    the constraint is capacity: the number of overlapping jobs against the number
+   *    of active technicians. This is why it is not simply skipped — an unassigned
+   *    job still needs a body, and accepting six of them for a crew of three is the
+   *    same broken promise as double-booking one person.
+   *
+   * A business with no technician records is treated as a crew of one, which is the
+   * one-person shop the old behaviour actually suited.
+   */
+  static async checkSlotConflictDetailed(
+    businessId: Types.ObjectId | string,
+    startAt: Date,
+    endAt: Date,
+    options: SlotConflictOptions = {}
+  ): Promise<SlotConflictResult> {
+    // Half-open on both sides, so back-to-back jobs touching at a boundary do not
+    // collide. A 10:00–11:00 and an 11:00–12:00 are two jobs, not a conflict.
+    const overlap: any = {
+      businessId,
+      status: LIVE_STATUSES,
+      startAt: { $lt: endAt },
+      endAt: { $gt: startAt },
+    };
+
+    if (options.excludeAppointmentId) {
+      overlap._id = { $ne: options.excludeAppointmentId };
+    }
+
+    if (options.technicianId) {
+      const clash = await Appointment.findOne({ ...overlap, technicianId: options.technicianId })
+        .select('technicianName startAt')
+        .lean();
+
+      if (!clash) return { conflict: false };
+
+      return {
+        conflict: true,
+        reason: clash.technicianName
+          ? `${clash.technicianName} is already booked for that time.`
+          : 'That technician is already booked for that time.',
+      };
+    }
+
+    const [overlapping, crewSize] = await Promise.all([
+      Appointment.countDocuments(overlap),
+      Technician.countDocuments({ businessId, active: true }),
+    ]);
+
+    const capacity = Math.max(1, crewSize);
+
+    if (overlapping < capacity) return { conflict: false };
+
+    return {
+      conflict: true,
+      reason:
+        capacity === 1
+          ? 'This time slot is already booked. Please choose another time.'
+          : `All ${capacity} technicians are already booked for that time.`,
+    };
+  }
+
+  /**
+   * Boolean form, kept because the conflict-check endpoint and the slot generator
+   * only need the yes/no.
    */
   static async checkSlotConflict(
     businessId: Types.ObjectId | string,
     startAt: Date,
     endAt: Date,
-    excludeAppointmentId?: Types.ObjectId | string
+    excludeAppointmentId?: Types.ObjectId | string,
+    technicianId?: Types.ObjectId | string | null
   ): Promise<boolean> {
-    const filter: any = {
-      businessId,
-      status: { $nin: ['cancelled', 'no_show'] },
-      startAt: { $lt: endAt },
-      endAt: { $gt: startAt },
-    };
-
-    if (excludeAppointmentId) {
-      filter._id = { $ne: excludeAppointmentId };
-    }
-
-    const conflicting = await Appointment.findOne(filter);
-    return !!conflicting;
+    const result = await this.checkSlotConflictDetailed(businessId, startAt, endAt, {
+      excludeAppointmentId,
+      technicianId,
+    });
+    return result.conflict;
   }
 
   /**
@@ -101,11 +188,23 @@ export class AvailabilityService {
 
   /**
    * Generate available slots for a given business, service, and date (YYYY-MM-DD).
+   *
+   * Every instant here is built from the business's own wall clock, which it was not
+   * before. The old version stamped `openTime` onto `Date.UTC(...)`, so a New York
+   * shop open 08:00–18:00 was offered slots covering 03:00–13:00 Eastern; the booking
+   * path compared the same hours in `business.timezone` and rejected most of them with
+   * a 409. The endpoint that offers slots and the service that accepts them were
+   * answering different questions, and this is where they now agree.
+   *
+   * Availability also matches the booking path's notion of "taken": a slot is free
+   * while the business still has an unbooked technician, rather than as soon as any
+   * one job overlaps.
    */
   static async getAvailableSlots(
     businessId: Types.ObjectId | string,
     serviceId: string,
-    dateStr: string
+    dateStr: string,
+    options: { technicianId?: Types.ObjectId | string | null } = {}
   ): Promise<{
     date: string;
     timezone: string;
@@ -131,12 +230,23 @@ export class AvailabilityService {
       throw new AppError('Invalid date format. Use YYYY-MM-DD', 400);
     }
 
-    const dateObj = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+    /**
+     * The weekday of the requested date, which needs no timezone.
+     *
+     * Worth stating because it looks like it should. `dateStr` is a calendar date, not
+     * an instant, and the 3rd of January 2027 is a Sunday everywhere — so the weekday
+     * is pure calendar arithmetic and the noon anchor is only there to keep `Date.UTC`
+     * clear of its own day boundary. Routing it through the business timezone would
+     * imply a zone-dependence that does not exist, and an earlier draft did exactly
+     * that: two `Intl` calls producing a value indistinguishable from this one.
+     *
+     * The timezone matters for the slot *instants* below, which is where the bug was.
+     */
     const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-    const dayOfWeek = dayNames[dateObj.getUTCDay()];
+    const weekday = dayNames[new Date(Date.UTC(year, month - 1, day, 12)).getUTCDay()];
 
     const dayHours = business.businessHours?.find(
-      (h) => h.day.toLowerCase() === dayOfWeek.toLowerCase()
+      (h) => h.day.toLowerCase() === weekday.toLowerCase()
     );
 
     if (!dayHours || !dayHours.isOpen) {
@@ -148,46 +258,78 @@ export class AvailabilityService {
       };
     }
 
-    // Parse openTime & closeTime (HH:MM)
-    const [openH, openM] = (dayHours.openTime || '08:00').split(':').map(Number);
-    const [closeH, closeM] = (dayHours.closeTime || '18:00').split(':').map(Number);
+    // The same parser `isWithinBusinessHours` uses, rather than a second inline split
+    // that could disagree with it about a malformed value.
+    const openTotalMins = parseTimeOfDay(dayHours.openTime, 8 * 60);
+    const closeTotalMins = parseTimeOfDay(dayHours.closeTime, 18 * 60);
 
-    const openTotalMins = openH * 60 + openM;
-    const closeTotalMins = closeH * 60 + closeM;
+    /**
+     * Existing appointments over the **local** day, not the UTC one.
+     *
+     * The old window ran UTC midnight to midnight, which for a Dallas business is
+     * 19:00 the previous evening to 19:00. An 8 PM job was outside it and so never
+     * blocked a slot on the day it actually falls on.
+     *
+     * Widened by a day on each side because a job that starts the previous local
+     * evening can still overlap this morning's first slot.
+     */
+    const windowStart = zonedWallClockToUtc(year, month, day - 1, 0, timezone);
+    const windowEnd = zonedWallClockToUtc(year, month, day + 2, 0, timezone);
 
-    // Fetch all existing non-cancelled appointments for this business on this day
-    const dayStart = new Date(Date.UTC(year, month - 1, day, 0, 0, 0));
-    const dayEnd = new Date(Date.UTC(year, month - 1, day, 23, 59, 59, 999));
-
-    const existingAppointments = await Appointment.find({
+    const appointmentFilter: any = {
       businessId,
-      status: { $nin: ['cancelled', 'no_show'] },
-      startAt: { $lt: dayEnd },
-      endAt: { $gt: dayStart },
-    });
+      status: LIVE_STATUSES,
+      startAt: { $lt: windowEnd },
+      endAt: { $gt: windowStart },
+    };
+
+    if (options.technicianId) appointmentFilter.technicianId = options.technicianId;
+
+    /**
+     * Capacity: one when a specific person was asked about, otherwise the crew size.
+     *
+     * Matches `checkSlotConflictDetailed`, so an offered slot is one the booking path
+     * will accept. A business with no technician records is a crew of one — the
+     * one-person shop the old business-wide behaviour actually suited.
+     */
+    const [existingAppointments, capacity] = await Promise.all([
+      Appointment.find(appointmentFilter).select('startAt endAt').lean(),
+      options.technicianId
+        ? Promise.resolve(1)
+        : Technician.countDocuments({ businessId, active: true }).then((n) => Math.max(1, n)),
+    ]);
 
     const slots: TimeSlot[] = [];
     const intervalMinutes = 30;
+    const now = Date.now();
 
     for (let m = openTotalMins; m + durationMinutes <= closeTotalMins; m += intervalMinutes) {
-      const slotStartH = Math.floor(m / 60);
-      const slotStartM = m % 60;
+      const slotStart = zonedWallClockToUtc(year, month, day, m, timezone);
 
-      const slotStart = new Date(Date.UTC(year, month - 1, day, slotStartH, slotStartM, 0));
+      /**
+       * Skip a local time that does not exist.
+       *
+       * On a spring-forward day the clock jumps 02:00 → 03:00, so 02:30 never
+       * happens. `zonedWallClockToUtc` returns the instant the clock actually
+       * reached, which reads back as 03:30 — offering that as a "02:30" slot would
+       * book a customer an hour later than they were told. Round-tripping and
+       * dropping the mismatch says "no such time today", which is the truth.
+       */
+      const readBack = zonedParts(slotStart, timezone);
+      if (!readBack || readBack.minutesOfDay !== m) continue;
+
       const slotEnd = new Date(slotStart.getTime() + durationMinutes * 60 * 1000);
 
-      // Check conflict
-      const hasConflict = existingAppointments.some(
+      const overlapping = existingAppointments.filter(
         (apt) => slotStart < apt.endAt && slotEnd > apt.startAt
-      );
+      ).length;
 
-      // Check if slot is in past
-      const isPast = slotStart.getTime() < Date.now();
+      const isPast = slotStart.getTime() < now;
 
       slots.push({
         startAt: slotStart.toISOString(),
         endAt: slotEnd.toISOString(),
-        available: !hasConflict && !isPast,
+        available: overlapping < capacity && !isPast,
       });
     }
 

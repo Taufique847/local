@@ -5,7 +5,20 @@ import Link from 'next/link';
 import { DashboardShell } from '@/components/dashboard/dashboard-shell';
 import { AppointmentService } from '@/services/appointment.service';
 import { AppointmentModal } from '@/components/appointments/appointment-modal';
+import { BusinessService } from '@/services/business.service';
 import { Appointment, AppointmentStatus } from '@/types/appointment';
+import { Business } from '@/types/business';
+import {
+  DEFAULT_TIMEZONE,
+  formatTimeInZone,
+  hourLabel,
+  parseTimeOfDay,
+  shiftDateKey,
+  weekdayForDateKey,
+  zonedDateKey,
+  zonedParts,
+  zoneAbbreviation,
+} from '@/lib/zoned-time';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
@@ -86,9 +99,33 @@ export default function AppointmentsPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
-  const [selectedDate, setSelectedDate] = useState<string>(
-    new Date().toISOString().split('T')[0]
-  );
+  /**
+   * The business's own hours and timezone.
+   *
+   * Loaded once. Without it this page had no way to know what "08:00" meant, so it
+   * rendered a hardcoded 8–18 grid bucketed in UTC.
+   */
+  const [business, setBusiness] = useState<Business | null>(null);
+  const timezone = business?.timezone || DEFAULT_TIMEZONE;
+
+  // Today where the business is. `toISOString()` gave today in UTC, which for a US
+  // dispatcher is tomorrow for the last few hours of every evening.
+  const [selectedDate, setSelectedDate] = useState<string>(() => zonedDateKey(new Date()));
+
+  useEffect(() => {
+    let cancelled = false;
+    BusinessService.getMyBusiness().then((b) => {
+      if (!cancelled) setBusiness(b);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Re-anchored once the real timezone arrives, so the board opens on the right day.
+  useEffect(() => {
+    if (business?.timezone) setSelectedDate(zonedDateKey(new Date(), business.timezone));
+  }, [business?.timezone]);
 
   // Pagination for list view
   const [page, setPage] = useState(1);
@@ -99,31 +136,52 @@ export default function AppointmentsPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editingAppointment, setEditingAppointment] = useState<Appointment | null>(null);
 
-  // Double-booking conflict detector engine
+  /**
+   * Real overlaps per technician.
+   *
+   * This used to group by `${techName}_${getUTCHours(startAt)}` and flag any bucket
+   * with more than one entry, which is neither necessary nor sufficient for a clash:
+   * two jobs starting in the same hour but an hour apart were flagged, while a
+   * 10:30–12:00 and an 11:00–12:00 were not. It also read `appt.technician`, a field
+   * the API does not return — the real ones are `technicianId` / `technicianName` —
+   * so in practice everything fell through to 'Unassigned' and nothing was ever
+   * flagged at all.
+   */
   const conflicts = useMemo(() => {
-    const techSlots: Record<string, Appointment[]> = {};
+    const byTech = new Map<string, Appointment[]>();
+
     appointments.forEach((appt) => {
-      const apptAny = appt as any;
-      const techName = typeof apptAny.technician === 'string'
-        ? apptAny.technician
-        : apptAny.technician?.name || apptAny.assignedTo || 'Unassigned';
-      if (techName !== 'Unassigned' && appt.status !== 'cancelled') {
-        const hour = new Date(appt.startAt).getUTCHours();
-        const key = `${techName}_${hour}`;
-        if (!techSlots[key]) techSlots[key] = [];
-        techSlots[key].push(appt);
+      if (appt.status === 'cancelled' || appt.status === 'no_show') return;
+      const techId = (appt as any).technicianId;
+      if (!techId) return; // Nobody is double-booked until somebody is assigned.
+      const key = typeof techId === 'string' ? techId : techId?._id || String(techId);
+      byTech.set(key, [...(byTech.get(key) ?? []), appt]);
+    });
+
+    const list: { tech: string; from: string; count: number; appts: Appointment[] }[] = [];
+
+    byTech.forEach((jobs) => {
+      const sorted = [...jobs].sort(
+        (a, b) => new Date(a.startAt).getTime() - new Date(b.startAt).getTime()
+      );
+
+      for (let i = 0; i < sorted.length - 1; i += 1) {
+        const current = sorted[i];
+        const next = sorted[i + 1];
+        // Half-open, matching the backend: touching at a boundary is not a clash.
+        if (new Date(next.startAt) < new Date(current.endAt)) {
+          list.push({
+            tech: (current as any).technicianName || 'Assigned technician',
+            from: formatTimeInZone(next.startAt, timezone),
+            count: 2,
+            appts: [current, next],
+          });
+        }
       }
     });
 
-    const list: { tech: string; hour: number; count: number; appts: Appointment[] }[] = [];
-    Object.entries(techSlots).forEach(([key, items]) => {
-      if (items.length > 1) {
-        const [tech, hourStr] = key.split('_');
-        list.push({ tech, hour: parseInt(hourStr, 10), count: items.length, appts: items });
-      }
-    });
     return list;
-  }, [appointments]);
+  }, [appointments, timezone]);
 
   // Fetch appointments
   const fetchAppointments = useCallback(async () => {
@@ -157,15 +215,19 @@ export default function AppointmentsPage() {
     fetchAppointments();
   }, [fetchAppointments]);
 
-  // Date Navigation
+  /**
+   * Date navigation on the key itself.
+   *
+   * `new Date('2026-09-21')` parses as UTC midnight; `setDate` then shifts it and
+   * `toISOString()` re-reads it in UTC. For a viewer behind Greenwich the round trip
+   * lost a day, so the arrows could stick or skip.
+   */
   const changeDateByDays = (days: number) => {
-    const current = new Date(selectedDate);
-    current.setDate(current.getDate() + days);
-    setSelectedDate(current.toISOString().split('T')[0]);
+    setSelectedDate((current) => shiftDateKey(current, days));
   };
 
   const setToday = () => {
-    setSelectedDate(new Date().toISOString().split('T')[0]);
+    setSelectedDate(zonedDateKey(new Date(), timezone));
   };
 
   // Quick Status Update
@@ -178,15 +240,14 @@ export default function AppointmentsPage() {
     }
   };
 
-  // Format Helpers
-  const formatTime = (isoString: string) => {
-    try {
-      const d = new Date(isoString);
-      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    } catch {
-      return isoString;
-    }
-  };
+  /**
+   * Times in the business's timezone, not the viewer's.
+   *
+   * This was `toLocaleTimeString()` with no `timeZone`, so an owner checking the board
+   * from another state saw every job shifted by the difference — while the grid rows
+   * beside them were labelled in UTC. Two wrong answers on one screen.
+   */
+  const formatTime = (isoString: string) => formatTimeInZone(isoString, timezone);
 
   const formatDateDisplay = (dateStr: string) => {
     try {
@@ -219,8 +280,47 @@ export default function AppointmentsPage() {
     };
   }, [appointments, viewMode, total]);
 
-  // Calendar Day View Hours (8 AM to 6 PM)
-  const calendarHours = Array.from({ length: 11 }, (_, i) => i + 8); // 8 to 18
+  /**
+   * Grid rows from the business's published hours for the day being viewed.
+   *
+   * Was `Array.from({ length: 11 }, (_, i) => i + 8)` — a fixed 8–18 in UTC. A shop
+   * open until 21:00 had three hours of its own schedule with nowhere to render, and a
+   * shop that opens at 07:00 had no row to click.
+   *
+   * Widened to cover any job already on the board that falls outside those hours, so an
+   * out-of-hours emergency callout is visible rather than silently dropped — which is
+   * what the fixed range did to anything before 08:00 or after 18:00 UTC.
+   */
+  const calendarHours = useMemo(() => {
+    const weekday = weekdayForDateKey(selectedDate);
+    const dayHours = business?.businessHours?.find(
+      (h) => h.day.toLowerCase() === weekday.toLowerCase()
+    );
+
+    let first = 8;
+    let last = 18;
+
+    if (dayHours?.isOpen) {
+      first = Math.floor(parseTimeOfDay(dayHours.openTime, 8 * 60) / 60);
+      // The row containing closing time, so a 17:30 close still shows a 17:00 row.
+      last = Math.ceil(parseTimeOfDay(dayHours.closeTime, 18 * 60) / 60);
+    }
+
+    for (const appt of appointments) {
+      const start = zonedParts(appt.startAt, timezone);
+      const end = zonedParts(appt.endAt, timezone);
+      if (start) first = Math.min(first, start.hour);
+      // A job ending exactly on the hour does not need that hour's row.
+      if (end) last = Math.max(last, end.minute > 0 ? end.hour + 1 : end.hour);
+    }
+
+    first = Math.max(0, Math.min(first, 23));
+    last = Math.max(first + 1, Math.min(last, 24));
+
+    return Array.from({ length: last - first }, (_, i) => i + first);
+  }, [business?.businessHours, selectedDate, appointments, timezone]);
+
+  const zoneLabel = zoneAbbreviation(timezone);
 
   return (
     <DashboardShell>
@@ -424,12 +524,15 @@ export default function AppointmentsPage() {
                   ⚠️ Double-Booking Conflict Detected
                 </h4>
                 <Badge className="bg-rose-200/80 text-rose-900 border-rose-300 text-[10px] font-bold">
-                  {conflicts.reduce((acc, c) => acc + c.count, 0)} Overlapping Jobs
+                  {conflicts.length} {conflicts.length === 1 ? 'Overlap' : 'Overlaps'}
                 </Badge>
               </div>
               <p className="text-xs text-rose-700 leading-relaxed">
-                {conflicts.map(c => `${c.tech} has ${c.count} appointments overlapping around ${c.hour > 12 ? c.hour - 12 + ':00 PM' : c.hour + ':00 AM'}`).join(' • ')}.
-                Adjust arrival windows or reassign a technician to prevent contractor scheduling delays.
+                {/* The overlapping job's own start time, in the business's timezone. */}
+                {conflicts
+                  .map((c) => `${c.tech} has a job starting at ${c.from} before the previous one ends`)
+                  .join(' • ')}
+                . Adjust arrival windows or reassign a technician to prevent contractor scheduling delays.
               </p>
             </div>
           </div>
@@ -564,6 +667,16 @@ export default function AppointmentsPage() {
                 <h2 className="text-sm font-bold text-slate-900 flex items-center gap-2">
                   <Clock className="w-4 h-4 text-blue-600" />
                   Hourly Dispatch Grid &bull; {formatDateDisplay(selectedDate)}
+                  {/*
+                    The zone, stated once. Every time on this board is now in the
+                    business's timezone, and a board full of unlabelled times is how a
+                    dispatcher and a technician end up an hour apart.
+                  */}
+                  {zoneLabel ? (
+                    <span className="text-[11px] font-semibold text-slate-500">
+                      all times {zoneLabel}
+                    </span>
+                  ) : null}
                 </h2>
                 <p className="text-xs text-slate-500">
                   Visual field timeline with one-click dispatch confirmation and technician status controls.
@@ -577,13 +690,19 @@ export default function AppointmentsPage() {
             <div className="space-y-2.5">
               {calendarHours.map((hour) => {
                 const hourFormatted = `${String(hour).padStart(2, '0')}:00`;
-                const displayHour = hour > 12 ? `${hour - 12} PM` : hour === 12 ? '12 PM' : `${hour} AM`;
+                const displayHour = hourLabel(hour);
 
-                // Appointments falling in or starting in this hour block
-                const matchingApts = appointments.filter((apt) => {
-                  const aptDate = new Date(apt.startAt);
-                  return aptDate.getUTCHours() === hour;
-                });
+                /**
+                 * Jobs that start in this hour, read in the business's timezone.
+                 *
+                 * `getUTCHours()` put a 10:00 Chicago job in the 15:00 row while the
+                 * card inside it said 10:00. Start-hour matching is kept deliberately:
+                 * a job appears once, in the row it begins, rather than being repeated
+                 * down every hour it spans.
+                 */
+                const matchingApts = appointments.filter(
+                  (apt) => zonedParts(apt.startAt, timezone)?.hour === hour
+                );
 
                 return (
                   <div

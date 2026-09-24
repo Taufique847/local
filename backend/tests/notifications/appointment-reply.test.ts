@@ -3,6 +3,7 @@ import {
   createWorkspace,
   createCustomerRecord,
   createServiceRecord,
+  bookableAt,
   type Workspace,
 } from '../helpers/factories';
 import { asUser } from '../helpers/agent';
@@ -15,7 +16,9 @@ import { RescheduleRequest } from '../../src/models/reschedule-request.model';
 import { CommunicationService } from '../../src/services/communication.service';
 import { AppointmentReplyService } from '../../src/services/appointment-reply.service';
 import { AvailabilityService } from '../../src/services/availability.service';
+import { BusinessPolicy } from '../../src/models/business-policy.model';
 import { AppointmentStatus } from '../../src/types/appointment.types';
+import { zonedWallClockToUtc } from '../../src/utils/format';
 
 /**
  * Confirm and reschedule by reply.
@@ -79,6 +82,26 @@ const makeAppointment = async (
     status: options.status ?? 'scheduled',
     address: '1 Test St, Testville, TX 75001',
   });
+};
+
+/**
+ * A Chicago wall-clock time, as a UTC instant.
+ *
+ * The opening-hours tests used to send a hardcoded UTC hour with a comment saying
+ * what it meant in Chicago — true in July and an hour out for the rest of the year,
+ * and both of them also happened to land in 2027, outside the 30-day booking horizon
+ * that nothing was checking. Stating the local time and converting says what the test
+ * means and survives DST.
+ */
+const chicagoWallClock = (daysAhead: number, minutesOfDay: number): Date => {
+  const target = new Date(Date.now() + daysAhead * 24 * HOUR);
+  return zonedWallClockToUtc(
+    target.getUTCFullYear(),
+    target.getUTCMonth() + 1,
+    target.getUTCDate(),
+    minutesOfDay,
+    'America/Chicago'
+  );
 };
 
 const inbound = (text: string, from = CUSTOMER_PHONE) =>
@@ -661,10 +684,9 @@ describe('opening hours on the reschedule path', () => {
 
     const appointment = await makeAppointment(ws.businessId);
 
-    // 09:00 UTC is 03:00 in Chicago (CDT, UTC-5) in July.
     const res = await asUser(ws.ownerToken)
       .post(`/api/appointments/${appointment._id}/reschedule`)
-      .send({ startAt: '2027-07-14T09:00:00.000Z' });
+      .send({ startAt: chicagoWallClock(5, 3 * 60).toISOString() });
 
     expect(res.status).toBe(409);
     expect(res.body.message ?? res.body.error).toMatch(/before you open|opening hours/i);
@@ -686,11 +708,69 @@ describe('opening hours on the reschedule path', () => {
 
     const appointment = await makeAppointment(ws.businessId);
 
-    // 16:00 UTC is 11:00 in Chicago.
     const res = await asUser(ws.ownerToken)
       .post(`/api/appointments/${appointment._id}/reschedule`)
-      .send({ startAt: '2027-07-14T16:00:00.000Z' });
+      .send({ startAt: chicagoWallClock(5, 11 * 60).toISOString() });
 
     expect(res.status).toBe(200);
+  });
+
+  it('refuses a move beyond the booking horizon', async () => {
+    /**
+     * The horizon is enforced on reschedule; minimum notice deliberately is not.
+     * They guard different things — notice protects the business from a job it has no
+     * time to prepare for, which an owner moving their own card is not, while a job
+     * moved a year out is a typo whoever made it and vanishes from every list that
+     * looks at the next month.
+     *
+     * These two tests previously both booked into 2027, which is outside the default
+     * 30-day horizon. They passed because nothing checked.
+     */
+    const appointment = await makeAppointment(ws.businessId);
+
+    const res = await asUser(ws.ownerToken)
+      .post(`/api/appointments/${appointment._id}/reschedule`)
+      .send({ startAt: chicagoWallClock(400, 11 * 60).toISOString() });
+
+    expect(res.status).toBe(409);
+    expect(res.body.message ?? res.body.error).toMatch(/days in advance/i);
+  });
+
+  it('allows a move inside the notice period, which creating would have refused', async () => {
+    /**
+     * Deliberate asymmetry, asserted rather than left to be discovered. With a
+     * three-day notice requirement, *booking* tomorrow is refused — the business said
+     * it needs the warning. *Moving* an existing job to tomorrow is not the same
+     * thing: the work is already on the books, and a customer asking to be seen
+     * sooner is usually the outcome everyone wants.
+     *
+     * Stated as a notice window rather than "in 30 minutes" so the test does not
+     * depend on what time of day the suite happens to run.
+     */
+    await BusinessPolicy.findOneAndUpdate(
+      { businessId: ws.businessId },
+      { $set: { minBookingNoticeHours: 72 } },
+      { upsert: true }
+    );
+
+    const appointment = await makeAppointment(ws.businessId);
+    const tomorrowMidday = bookableAt(1).toISOString();
+
+    const rejected = await asUser(ws.ownerToken)
+      .post('/api/appointments')
+      .send({
+        customerId: (appointment.customerId as any).toString(),
+        serviceId: (appointment.serviceId as any).toString(),
+        startAt: tomorrowMidday,
+      });
+
+    expect(rejected.status).toBe(409);
+    expect(rejected.body.message ?? rejected.body.error).toMatch(/advance notice/i);
+
+    const moved = await asUser(ws.ownerToken)
+      .post(`/api/appointments/${appointment._id}/reschedule`)
+      .send({ startAt: tomorrowMidday });
+
+    expect(moved.status).toBe(200);
   });
 });

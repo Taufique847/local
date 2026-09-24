@@ -36,7 +36,17 @@ export class AvailabilityController {
         throw new AppError('date query parameter (YYYY-MM-DD) is required', 400);
       }
 
-      const result = await AvailabilityService.getAvailableSlots(businessId, serviceId, date);
+      /**
+       * An optional technician narrows availability to one person's diary.
+       *
+       * Without it the answer is the business's remaining capacity, which is what
+       * the booking modal wants before anyone has been picked.
+       */
+      const { technicianId } = req.query;
+
+      const result = await AvailabilityService.getAvailableSlots(businessId, serviceId, date, {
+        technicianId: typeof technicianId === 'string' && technicianId ? technicianId : null,
+      });
       sendSuccess(res, { success: true, ...result }, 200);
     } catch (error) {
       next(error);
@@ -53,19 +63,26 @@ export class AvailabilityController {
       if (!req.user) throw new AppError('Authentication required', 401);
       const businessId = await AvailabilityController.getBusinessId(req.user.id);
 
-      const { startAt, endAt, excludeAppointmentId } = req.body;
+      const { startAt, endAt, excludeAppointmentId, technicianId } = req.body;
       if (!startAt || !endAt) {
         throw new AppError('startAt and endAt are required', 400);
       }
 
-      const hasConflict = await AvailabilityService.checkSlotConflict(
+      /**
+       * Returns the reason as well as the boolean.
+       *
+       * "Already booked" is not actionable; "Dana is already booked for that time"
+       * tells a dispatcher to pick someone else, which is the decision they are at
+       * this screen to make.
+       */
+      const result = await AvailabilityService.checkSlotConflictDetailed(
         businessId,
         new Date(startAt),
         new Date(endAt),
-        excludeAppointmentId
+        { excludeAppointmentId, technicianId }
       );
 
-      sendSuccess(res, { success: true, hasConflict }, 200);
+      sendSuccess(res, { success: true, hasConflict: result.conflict, reason: result.reason }, 200);
     } catch (error) {
       next(error);
     }

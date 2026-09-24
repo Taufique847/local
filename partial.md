@@ -136,7 +136,7 @@ Subtotal: **22.5 days** of feature work.
 - **#41** — the "6 literals in a switch" is now one templates module covering both channels, and `renderTemplate` still does not receive a `businessId`. The per-business override model and editor are untouched, so the 2-day estimate stands.
 - **Days 14–15 (#42)** — done. The duplicated arithmetic is one `PricingService`; travel fees, discounts and the never-billed `emergencyFee` all work. One line of that row's "missing" column is deliberately **not** closed: *"tax is one flat blended rate; customer state/zip never consulted"*. A per-jurisdiction tax table is a different feature from a pricing engine, and guessing a rate from a ZIP is worse than using the rate the business entered. It is recorded in the Day 24 close-out instead.
 
-**~9 days remain** of the original 24: Day 1 (defects), Days 2–13, Day 13½ and Days 14–15 are done, leaving Days 16–24 — the calendar (#14), real dispatch (#18) and close-out.
+**~8 days remain** of the original 24: Day 1 (defects), Days 2–13, Day 13½, Days 14–15 and Day 16 are done, leaving Days 17–24 — the rest of the calendar (#14), real dispatch (#18) and close-out.
 
 Of the nine partial features, **seven are now complete**: #38, #39, #41, #10, #13 and #42, plus #18's `technicianId` prerequisite from Day 0. The two genuinely outstanding are the calendar (#14) and dispatch (#18), which is exactly the 15-day cut described below — and the reason it was the recommended one.
 
@@ -303,7 +303,41 @@ Fixtures are now pinned to **UTC**, which papers over a real inconsistency rathe
 - Replacing the derived total with `Number((taxable + tax).toFixed(2))` is **genuinely behaviour-neutral**, and the reason is written into the code: the true value always sits exactly on a whole cent, so the ~1e-13 error in the float addition can never cross a rounding boundary. The derived form is kept because it needs no such argument — and that argument is what would quietly stop holding if anyone added a third addend.
 
 ### Days 16–19 · Feature 14: the calendar
-- **Day 16** — Timezone correctness and per-technician conflicts. Replace `getUTCHours()` bucketing with business-timezone rendering. Change `checkSlotConflict` to scope by technician when one is assigned, so a five-technician business can hold five concurrent jobs — today it cannot hold two. This is a behaviour change to a lock-protected path, so it needs its own concurrency test alongside the existing 5-parallel-booking one.
+
+#### Day 16 · timezone correctness and per-technician conflicts — ✅ **done**
+
+45 tests in `backend/tests/scheduling/availability-timezone.test.ts`; **61 distinct mutations attempted, 61 caught** after three passes.
+
+**The missing primitive.** `backend/src/utils/format.ts` had `zonedParts` — instant → local wall clock — and nothing going the other way. So `getAvailableSlots`, needing an instant for "08:00 where the business is", reached for `Date.UTC(y, m, d, 8, 0)`: eight in the morning in Greenwich. `zonedWallClockToUtc` is now that inverse, plus `zonedDayBounds` and `zonedDateKey` built on it.
+
+It generates two candidate instants and **verifies each by reading it back**, rather than correcting the first with the second's offset. Correcting is what an earlier draft did and it is wrong: across a spring-forward gap the two corrections oscillate, and the version that looked right returned 01:30 for a requested 02:30. The two inherent ambiguities are resolved explicitly — a time that does not exist yields the instant the clock actually reached, and a time that happens twice yields the earlier — and slot generation round-trips every slot so a 02:30 that is really 03:30 is dropped rather than offered.
+
+**What the split was actually costing.** A New York shop open 08:00–18:00 was offered slots covering 03:00–13:00 Eastern. `isWithinBusinessHours` compared the same strings in `business.timezone` and rejected everything before 08:00 local, so roughly half of every offered day was a 409 waiting to happen — through the booking modal, the voice AI's `check_availability`, and the SMS reschedule offers. There is now a test that asserts the invariant directly: **every slot offered must pass `isWithinBusinessHours`.**
+
+**Per-technician conflicts.** `checkSlotConflict` filtered on `businessId` alone, so a five-technician company could hold exactly one job at any instant — a scheduling product that could not schedule a crew. Now two questions, because they are different ones:
+
+- **A job with someone assigned** asks "is this person free?", and the refusal names them. "Dana is already booked" is a decision a dispatcher can act on; "already booked" is not.
+- **An unassigned job** asks "is anyone left?" — overlapping jobs against active technicians. Not skipped, because an unassigned job still needs a body, and accepting six for a crew of three is the same broken promise as double-booking one person. No technician records means a crew of one, which is the shop the old behaviour actually suited.
+
+The technician is now resolved **before** the conflict check on the create path. The old order asked the capacity question for a job that already had a named owner, which would have left the limitation in place.
+
+**Other defects fixed, all pre-existing**
+
+- **`getTodayAppointments` and the `date` list filter built a UTC day.** For a Dallas business that window runs 19:00 the previous evening to 19:00, so the evening's jobs were filed under tomorrow — on the page and the endpoint that exist to answer "what is happening today". `call.service.ts` had the identical bug. Windows are now half-open on the local day, so a job at exactly local midnight belongs to one day rather than both.
+- **`rescheduleAppointment` never checked the booking horizon**, so a job could be moved five years out and vanish from every list. Now enforced. Minimum notice deliberately is **not**: notice protects the business from a job it has no time to prepare for, which an owner moving work already on the books is not. Both halves of that asymmetry have a test so it stays a decision.
+- **Lead timeline notes used `toLocaleString()` with no zone**, so on a UTC host a 2:00 PM Dallas job was recorded as 7:00 PM on the note a salesperson reads back to the customer.
+- **The frontend grid was wrong in four ways at once.** Rows were a hardcoded 8–18 in UTC; jobs were bucketed with `getUTCHours()`; card times used `toLocaleTimeString()` with no zone, so the row label and the text inside it disagreed by four to eight hours; and the date arrows round-tripped through `toISOString()`, which for a viewer behind Greenwich lost a day. Rows now come from the business's published hours for that weekday, widened to cover any job outside them so an out-of-hours callout is visible rather than dropped, and the zone is stated once in the header.
+- **The frontend's double-booking badge never fired.** It grouped by `${techName}_${getUTCHours(startAt)}` — neither necessary nor sufficient for an overlap — and read `appt.technician`, a field the API does not return, so everything fell through to `'Unassigned'` and was skipped. Now a real half-open overlap check per `technicianId`, matching the backend.
+
+**Two mutation survivors, both resolved by deleting the thing that survived**
+
+- The read-back check compared year, month, day and minutes. The day clause could not fire — the offset is at most ±14 hours, so a candidate whose minutes match is never on another date — so the check is now stated as its own definition, `instant + offset(instant) === requested`, with every part load-bearing.
+- Resolving the weekday through the business timezone was indistinguishable from resolving it in UTC, because a weekday is a property of a calendar date and not of an instant. Two `Intl` calls implying a zone-dependence that does not exist; replaced with the calendar arithmetic it always was, and a comment saying why it looks like it should need a zone.
+
+Two survivors also exposed a real gap rather than dead code: nothing asserted that a **crewless** business gets *available* slots. A capacity of zero would have made `overlapping < capacity` false everywhere and reported an empty calendar as fully booked — for the default account, which has no technician records at all.
+
+#### Remaining
+
 - **Day 17** — Week and month views, finally calling the `getCalendarAppointments` range endpoint that has existed and gone unused. Technician lanes in the day view (possible only after BUG-B).
 - **Day 18** — Drag-and-drop to reschedule, routed through `rescheduleAppointment` so the lock, conflict re-check and `rescheduleHistory` all still apply. Optimistic UI with rollback on a 409. Note `rescheduleAppointment` currently re-checks slot overlap but **not** business hours — add that, or a drag onto a closed Sunday will succeed.
 - **Day 19** — Recurring appointments: `recurrenceRule` + `recurrenceParentId`, generation horizon, and edit-one-vs-edit-series. Deliberately last in this group — it is the piece a maintenance-plan feature later depends on, and the easiest to defer.

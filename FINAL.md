@@ -1,6 +1,6 @@
 # BlueCollar AI — Final Feature Status
 
-> **Verified:** 23 September 2026, by reading `backend/src` and `frontend/app` directly, by running the built server against a live database, and by a 497-test automated suite whose guards were each confirmed by deliberately breaking them.
+> **Verified:** 23 September 2026, by reading `backend/src` and `frontend/app` directly, by running the built server against a live database, and by a 546-test automated suite whose guards were each confirmed by deliberately breaking them.
 >
 > Reference vision: `targetFeaturesIdea.md` (86 numbered features, sections A–J).
 > This file supersedes the status sections of `PROJECT_STATUS_AND_ROADMAP.md`, which was written before the Week 1–4 hardening, Tier 1/Tier 2 work and QA bug fixes landed.
@@ -56,7 +56,7 @@ Each row was confirmed in code, and where marked ✓runtime, exercised against a
 
 | # | Feature | Status | Notes |
 |---|---|---|---|
-| 14 | Unified calendar | 🟡 Partial | Day/week/month views and a calendar API. No drag-and-drop, no recurring appointments. |
+| 14 | Unified calendar | 🟡 Partial | Day view only, but now **correct**: slots are generated in the business's timezone and every offered slot is one the booking path accepts, which was not true before — roughly half of each day was a 409 in waiting. Conflicts are per technician, so a crew can hold concurrent jobs. Still missing week and month views (the range endpoint exists and is unused), drag-and-drop, and recurring appointments. |
 | 16 | Service catalog | ✅ Built | Duration, price, category, skill, emergency flag. Starter catalogue now matches the trade. ✓runtime |
 | 17 | Booking rules | ✅ Built | Hours, minimum notice, booking horizon, emergency keywords, service-zone check. |
 | 18 | Dispatch assignment | 🟡 Partial | Zip-zone + skill matching and a dispatch SMS. **No route optimisation, no map UI.** |
@@ -129,7 +129,7 @@ Each row was confirmed in code, and where marked ✓runtime, exercised against a
 | Password reset by email, single-use, revokes all sessions | ✅ Built ✓tested (send path unexercised) |
 | Staff invitations — email link, single use, tenant-bound | ✅ Built ✓tested (send path unexercised) |
 | Media-stream WebSocket authorization (single-use signed token) | ✅ Built ✓tested |
-| Automated test suite — 497 tests over tenancy, money, auth, pricing, notifications and segments | ✅ Built, wired into CI |
+| Automated test suite — 546 tests over tenancy, money, auth, pricing, notifications and segments | ✅ Built, wired into CI |
 | Data retention sweep + per-customer data erasure | ✅ Built |
 | AI/recording disclosure spoken before the assistant answers | ✅ Built |
 | Docker, compose, CI (typecheck/build/secrets/image) | ✅ Built |
@@ -150,7 +150,7 @@ Each row was confirmed in code, and where marked ✓runtime, exercised against a
 | A2 | **Password reset flow** | ✅ Done | There was no recovery path at all — a forgotten password meant permanent lockout. | — |
 | A3 | **Commit the work** | ✅ Done | Committed in four logical commits on `feat/staff-accounts-rbac-and-tests` and pushed. Verified no `.env`, key material or temp file entered any commit. | — |
 | ~~A4~~ | ~~**Rotate the leaked credential**~~ | ❌ **Withdrawn — was never true** | See below. | — |
-| A5 | **Tests for the money and tenancy paths** | ✅ Done | The QA pass found a critical cross-tenant hole precisely because nothing guarded these. 497 tests now cover worker tenant + per-technician scoping, portal share tokens, Stripe and Twilio webhook signatures, RBAC, password reset, invitations, the media-stream token, job-completion pricing, SMS consent, notification templates, equipment and property data, and segment campaigns. | — |
+| A5 | **Tests for the money and tenancy paths** | ✅ Done | The QA pass found a critical cross-tenant hole precisely because nothing guarded these. 546 tests now cover worker tenant + per-technician scoping, portal share tokens, Stripe and Twilio webhook signatures, RBAC, password reset, invitations, the media-stream token, pricing and job completion, scheduling and timezones, SMS consent, notification templates, equipment and property data, and segment campaigns. | — |
 
 **On defects found since.** Writing `partial.md` — a day-by-day plan to finish the nine partial features — required reading all nine at model, service, controller and page level. That read turned up **seven defects in shipped code**, all now fixed with tests and mutation checks. Four shared one root cause worth naming: code reading or writing a field that does not exist on the schema, which Mongoose silently tolerates in both directions. The worst of them meant a customer who texted STOP kept receiving messages. Details in `partial.md` §2.
 
@@ -255,7 +255,8 @@ Worth knowing before a demo, because each one reads as finished in the UI.
 | Technician assignment | Automated through the real booking path — cross-tenant and inactive technicians refused, name derived from the record |
 | SMS consent | Automated — STOP persists and blocks sending, START restores, no duplicate booking from a consent reply |
 | Pricing rules | Automated — a table of inputs to exact expected totals, the order of operations distinguished from its plausible alternatives, prices chosen for their floating-point representation error, per-zone travel fees and discounts, and cross-tenant reads of the appointment priority and the customer ZIP refused |
-| **Automated tests** | ✅ 497 tests, 21 files, in CI. Mutation-checked: **233 deliberate regressions attempted, 230 caught** (27 on staff accounts/RBAC, 24 on Days 2–5, 90 on Days 6–13, 24 on email consent, 68 on pricing — per-group breakdown in `partial.md`). Two survivors, both verified behaviour-neutral and documented in place: a redundant tenant clause whose load-bearing twin *was* caught, and a total rounded in dollars rather than derived in cents, which is equivalent only because of an argument about floating-point ulps that the code explains and declines to depend on. Separately, three pieces of code were found to be **unreachable** and deleted rather than left implying checks that could never fire |
+| Scheduling and timezones | Automated — wall-clock-to-instant conversion across both DST transitions and a zone that has none, the invariant that every offered slot passes the booking path's own opening-hours check, per-technician conflicts, crew capacity for unassigned jobs, five parallel bookings for one technician yielding one job, and two tenants booking the same instant |
+| **Automated tests** | ✅ 546 tests, 22 files, in CI. Mutation-checked: **294 deliberate regressions attempted, 291 caught** (27 on staff accounts/RBAC, 24 on Days 2–5, 90 on Days 6–13, 24 on email consent, 68 on pricing, 61 on scheduling — per-group breakdown in `partial.md`). Two survivors, both verified behaviour-neutral and documented in place: a redundant tenant clause whose load-bearing twin *was* caught, and a total rounded in dollars rather than derived in cents, which is equivalent only because of an argument about floating-point ulps that the code explains and declines to depend on. Separately, **five** pieces of code were found to be unreachable or observationally identical to a simpler form, and were deleted rather than left implying checks that could never fire |
 | **Voice pipeline end to end** | ❌ Never — no provider keys |
 | **Email delivery** | ❌ Never — no `EMAIL_API_KEY`. Reset and invite flows are tested with the sender stubbed, so the token lifecycle is proven and the Resend call is not |
 | **Live card payment** | ❌ Never — Stripe in simulation mode |
