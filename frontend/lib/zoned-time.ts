@@ -154,3 +154,84 @@ export const hourLabel = (hour: number): string => {
   if (hour === 12) return '12 PM';
   return hour > 12 ? `${hour - 12} PM` : `${hour} AM`;
 };
+
+/**
+ * The Sunday-to-Saturday week containing a date key.
+ *
+ * Sunday-first because `DayHours.day` is ordered that way and the business-hours editor
+ * already presents the week like that; a calendar that disagreed with the settings page
+ * about which day the week starts on is its own small bug.
+ */
+export const weekOf = (key: string): string[] => {
+  const [y, m, d] = key.split('-').map(Number);
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return [];
+  const noon = new Date(Date.UTC(y, m - 1, d, 12));
+  const sunday = shiftDateKey(key, -noon.getUTCDay());
+  return Array.from({ length: 7 }, (_, i) => shiftDateKey(sunday, i));
+};
+
+/**
+ * The month grid containing a date key: whole weeks, so the grid is rectangular.
+ *
+ * Returns between 28 and 42 keys, which is why the server caps a calendar range at 62
+ * days rather than 31 — a month view legitimately asks for more days than the month has.
+ */
+export const monthGridOf = (key: string): string[] => {
+  const [y, m] = key.split('-').map(Number);
+  if (!Number.isFinite(y) || !Number.isFinite(m)) return [];
+
+  const firstOfMonth = `${y}-${String(m).padStart(2, '0')}-01`;
+  const daysInMonth = new Date(Date.UTC(y, m, 0, 12)).getUTCDate();
+  const lastOfMonth = `${y}-${String(m).padStart(2, '0')}-${String(daysInMonth).padStart(2, '0')}`;
+
+  const start = weekOf(firstOfMonth)[0];
+  const end = weekOf(lastOfMonth)[6];
+
+  const keys: string[] = [];
+  for (let cursor = start; ; cursor = shiftDateKey(cursor, 1)) {
+    keys.push(cursor);
+    if (cursor === end) break;
+    // Cannot exceed six weeks; the guard is here so a malformed key cannot spin.
+    if (keys.length >= 42) break;
+  }
+
+  return keys;
+};
+
+/** `2026-09` from `2026-09-21`, for "is this cell in the month being viewed". */
+export const monthOf = (key: string): string => key.slice(0, 7);
+
+/** A short human label for a date key, e.g. `Mon 21`. */
+export const shortDayLabel = (key: string): string => {
+  const [, , d] = key.split('-').map(Number);
+  return `${weekdayForDateKey(key).slice(0, 3)} ${d}`;
+};
+
+/** `September 2026` for a date key. */
+export const monthLabel = (key: string): string => {
+  const [y, m] = key.split('-').map(Number);
+  if (!Number.isFinite(y) || !Number.isFinite(m)) return key;
+  return new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(
+    new Date(Date.UTC(y, m - 1, 1, 12))
+  );
+};
+
+/**
+ * Shifts a date key by whole months, clamping the day.
+ *
+ * `Date.UTC(y, m + 1, 31)` silently rolls into the next month, so paging from 31 January
+ * would land in March and skip February entirely. Clamped to the target month's last day.
+ */
+export const shiftMonthKey = (key: string, months: number): string => {
+  const [y, m, d] = key.split('-').map(Number);
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return key;
+
+  const target = new Date(Date.UTC(y, m - 1 + months, 1, 12));
+  const targetYear = target.getUTCFullYear();
+  const targetMonth = target.getUTCMonth() + 1;
+  const daysInTarget = new Date(Date.UTC(targetYear, targetMonth, 0, 12)).getUTCDate();
+
+  return `${targetYear}-${String(targetMonth).padStart(2, '0')}-${String(
+    Math.min(d, daysInTarget)
+  ).padStart(2, '0')}`;
+};

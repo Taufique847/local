@@ -29,6 +29,21 @@ export class AppointmentService {
     );
   }
 
+  /**
+   * Every appointment across an inclusive range of local dates, for the week and month
+   * views.
+   *
+   * Unpaginated by design — a month grid needs all of it to place anything — and bounded
+   * server-side at 62 days. This endpoint existed from the start and nothing called it,
+   * which is why the calendar was day-only.
+   */
+  public static async getCalendar(from: string, to: string): Promise<Appointment[]> {
+    const json = await apiClient.get<{ appointments?: Appointment[] }>(
+      `/api/appointments/calendar?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
+    );
+    return json.appointments || [];
+  }
+
   /** Feeds the dashboard's today strip, so it degrades to empty rather than erroring. */
   public static async getTodayAppointments(): Promise<Appointment[]> {
     try {

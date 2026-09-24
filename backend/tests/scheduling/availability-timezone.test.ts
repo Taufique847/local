@@ -1229,3 +1229,229 @@ describe('the lead timeline records the business’s time, not the server’s', 
     expect(note.description).toMatch(/C[SD]T/);
   });
 });
+
+describe('the calendar range endpoint', () => {
+  /**
+   * Day 17: the week and month views finally call this.
+   *
+   * It had existed since the beginning with no caller, so neither of its two defects had
+   * ever been seen: `new Date('2026-09-21')` parses as UTC midnight, making the range a
+   * UTC one, and `$lte: toDate` put the upper boundary at midnight *starting* the `to`
+   * date — so the last day of every range was empty and a Monday-to-Sunday week view
+   * would have shown six days.
+   */
+  const seedAt = async (
+    businessId: string,
+    serviceId: any,
+    customerId: any,
+    startAt: Date,
+    status = 'scheduled'
+  ) =>
+    Appointment.create({
+      businessId,
+      customerId,
+      serviceId,
+      startAt,
+      endAt: new Date(startAt.getTime() + 30 * 60 * 1000),
+      status,
+      timezone: 'America/Chicago',
+      address: '1 Test St',
+    });
+
+  const setup = async () => {
+    const shop = await createWorkspace();
+    await configure(shop.businessId, 'America/Chicago', '00:00', '23:59');
+    const [service, customer] = await Promise.all([
+      createServiceRecord(shop.businessId),
+      createCustomerRecord(shop.businessId),
+    ]);
+    return { shop, service, customer };
+  };
+
+  it('includes the whole of the last day in the range', async () => {
+    const { shop, service, customer } = await setup();
+
+    const from = dateKeyAhead(3, 'America/Chicago');
+    const to = dateKeyAhead(9, 'America/Chicago');
+    const [ty, tm, td] = keyParts(to);
+
+    // Late on the final day — the instant the old `$lte` boundary excluded.
+    const lastEvening = zonedWallClockToUtc(ty, tm, td, 22 * 60, 'America/Chicago');
+    const job = await seedAt(shop.businessId, service._id, customer._id, lastEvening);
+
+    const found = await AppointmentService.getCalendarAppointments(shop.businessId, from, to);
+
+    expect(found.map((a) => a._id.toString())).toContain(job._id.toString());
+  });
+
+  it('excludes the evening before the range starts', async () => {
+    const { shop, service, customer } = await setup();
+
+    const from = dateKeyAhead(3, 'America/Chicago');
+    const [fy, fm, fd] = keyParts(from);
+
+    // 23:00 the previous local day. A UTC-anchored range would have swallowed it,
+    // because UTC midnight on the `from` date is 19:00 the previous evening in Chicago.
+    const previousEvening = zonedWallClockToUtc(fy, fm, fd - 1, 23 * 60, 'America/Chicago');
+    await seedAt(shop.businessId, service._id, customer._id, previousEvening);
+
+    const found = await AppointmentService.getCalendarAppointments(
+      shop.businessId,
+      from,
+      dateKeyAhead(9, 'America/Chicago')
+    );
+
+    expect(found).toHaveLength(0);
+  });
+
+  it('includes the first moment of the first local day', async () => {
+    const { shop, service, customer } = await setup();
+
+    const from = dateKeyAhead(3, 'America/Chicago');
+    const [fy, fm, fd] = keyParts(from);
+    const firstMidnight = zonedWallClockToUtc(fy, fm, fd, 0, 'America/Chicago');
+    const job = await seedAt(shop.businessId, service._id, customer._id, firstMidnight);
+
+    const found = await AppointmentService.getCalendarAppointments(
+      shop.businessId,
+      from,
+      dateKeyAhead(9, 'America/Chicago')
+    );
+
+    expect(found.map((a) => a._id.toString())).toContain(job._id.toString());
+  });
+
+  it('excludes the midnight that starts the day after the range', async () => {
+    /**
+     * The other end of the same half-open window. `$lte` on the upper bound would pull in
+     * a job at exactly 00:00 on the day *after* `to` — so every week view would show a
+     * job belonging to the following week, and two adjacent weeks would both claim it.
+     */
+    const { shop, service, customer } = await setup();
+
+    const to = dateKeyAhead(9, 'America/Chicago');
+    const [ty, tm, td] = keyParts(to);
+    const nextMidnight = zonedWallClockToUtc(ty, tm, td + 1, 0, 'America/Chicago');
+    await seedAt(shop.businessId, service._id, customer._id, nextMidnight);
+
+    const found = await AppointmentService.getCalendarAppointments(
+      shop.businessId,
+      dateKeyAhead(3, 'America/Chicago'),
+      to
+    );
+
+    expect(found).toHaveLength(0);
+  });
+
+  it('handles a single-day range', async () => {
+    // `to === from` is a legitimate request and must not be read as an empty window.
+    const { shop, service, customer } = await setup();
+
+    const day = dateKeyAhead(3, 'America/Chicago');
+    const [y, m, d] = keyParts(day);
+    const job = await seedAt(
+      shop.businessId,
+      service._id,
+      customer._id,
+      zonedWallClockToUtc(y, m, d, 14 * 60, 'America/Chicago')
+    );
+
+    const found = await AppointmentService.getCalendarAppointments(shop.businessId, day, day);
+    expect(found.map((a) => a._id.toString())).toEqual([job._id.toString()]);
+  });
+
+  it('returns jobs in start order', async () => {
+    const { shop, service, customer } = await setup();
+
+    const day = dateKeyAhead(3, 'America/Chicago');
+    const [y, m, d] = keyParts(day);
+    const at = (minutes: number) => zonedWallClockToUtc(y, m, d, minutes, 'America/Chicago');
+
+    await seedAt(shop.businessId, service._id, customer._id, at(16 * 60));
+    await seedAt(shop.businessId, service._id, customer._id, at(9 * 60));
+
+    const found = await AppointmentService.getCalendarAppointments(shop.businessId, day, day);
+    expect(found.map((a) => zonedParts(a.startAt, 'America/Chicago')!.hour)).toEqual([9, 16]);
+  });
+
+  it('omits cancelled jobs', async () => {
+    const { shop, service, customer } = await setup();
+
+    const day = dateKeyAhead(3, 'America/Chicago');
+    const [y, m, d] = keyParts(day);
+    await seedAt(
+      shop.businessId,
+      service._id,
+      customer._id,
+      zonedWallClockToUtc(y, m, d, 14 * 60, 'America/Chicago'),
+      'cancelled'
+    );
+
+    expect(await AppointmentService.getCalendarAppointments(shop.businessId, day, day)).toHaveLength(
+      0
+    );
+  });
+
+  it('never returns another business’s appointments', async () => {
+    const { shop, service, customer } = await setup();
+    const other = await setup();
+
+    const day = dateKeyAhead(3, 'America/Chicago');
+    const [y, m, d] = keyParts(day);
+    const at = zonedWallClockToUtc(y, m, d, 14 * 60, 'America/Chicago');
+
+    await seedAt(shop.businessId, service._id, customer._id, at);
+    await seedAt(other.shop.businessId, other.service._id, other.customer._id, at);
+
+    const found = await AppointmentService.getCalendarAppointments(shop.businessId, day, day);
+    expect(found).toHaveLength(1);
+    expect(found[0].businessId.toString()).toBe(shop.businessId);
+  });
+
+  it('accepts the 42 days a padded month grid asks for', async () => {
+    /**
+     * A month view pads to whole weeks, so it legitimately requests more days than the
+     * month has. The server cap is 62 rather than 31 for exactly this reason.
+     */
+    const { shop } = await setup();
+    const from = dateKeyAhead(1, 'America/Chicago');
+    const to = dateKeyAhead(42, 'America/Chicago');
+
+    await expect(
+      AppointmentService.getCalendarAppointments(shop.businessId, from, to)
+    ).resolves.toEqual([]);
+  });
+
+  it('refuses a range longer than two months', async () => {
+    // Unpaginated, so an unbounded range is an unbounded response.
+    const { shop } = await setup();
+
+    await expect(
+      AppointmentService.getCalendarAppointments(
+        shop.businessId,
+        dateKeyAhead(1, 'America/Chicago'),
+        dateKeyAhead(400, 'America/Chicago')
+      )
+    ).rejects.toThrow(/limited to 62 days/i);
+  });
+
+  it('refuses a range that ends before it starts', async () => {
+    const { shop } = await setup();
+
+    await expect(
+      AppointmentService.getCalendarAppointments(
+        shop.businessId,
+        dateKeyAhead(9, 'America/Chicago'),
+        dateKeyAhead(3, 'America/Chicago')
+      )
+    ).rejects.toThrow(/same day as `from` or later/i);
+  });
+
+  it('refuses a malformed date rather than returning everything', async () => {
+    const { shop } = await setup();
+
+    await expect(
+      AppointmentService.getCalendarAppointments(shop.businessId, 'last-tuesday', 'soon')
+    ).rejects.toThrow(/YYYY-MM-DD/);
+  });
+});

@@ -31,7 +31,7 @@
 >   ('owner' \| 'dispatcher' \| 'technician') gates tenant endpoints. Both are read from the
 >   database per request, so a demotion applies on the next call rather than at token expiry.
 >   The "RBAC matrix would be vacuous" note under Untested Areas no longer applies.
-> - *"~90 discrete adversarial test cases"* run by hand — there is now a **546-test automated
+> - *"~90 discrete adversarial test cases"* run by hand — there is now a **558-test automated
 >   suite** (18 files) in CI covering tenancy, webhook signatures, RBAC, token lifecycles,
 >   job-completion pricing, notifications, templates, equipment and property data, and segment
 >   campaigns. 165 mutations have been attempted against its guards and 164 caught; the one`r`n>   survivor is a redundant tenant clause whose load-bearing twin was caught, verified`r`n>   behaviour-neutral and documented in place.

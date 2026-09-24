@@ -508,20 +508,51 @@ export class AppointmentService {
   }
 
   /**
-   * Get calendar range appointments (for week or month views)
+   * Appointments across an inclusive range of local dates, for the week and month views.
+   *
+   * This endpoint has existed since the beginning and nothing ever called it, so its two
+   * defects were never seen:
+   *
+   *  - `new Date('2026-09-21')` parses as UTC midnight, so the range was a UTC one. For a
+   *    Dallas business a "week" ran from 19:00 the previous Sunday.
+   *  - `$lte: toDate` put the boundary at midnight *starting* the `to` date, so the last
+   *    day of every range contained nothing. A Monday-to-Sunday week view showed six days.
+   *
+   * `to` is now inclusive of its whole local day, which is what a date range means to
+   * the person typing it.
    */
   static async getCalendarAppointments(
     businessId: Types.ObjectId | string,
     from: string,
     to: string
   ): Promise<IAppointment[]> {
-    const fromDate = new Date(from);
-    const toDate = new Date(to);
+    const timezone = await AppointmentService.timezoneFor(businessId);
+
+    const fromBounds = zonedDayBounds(from, timezone);
+    const toBounds = zonedDayBounds(to, timezone);
+
+    if (!fromBounds || !toBounds) {
+      throw new AppError('from and to must be dates in YYYY-MM-DD form', 400);
+    }
+
+    if (toBounds.end.getTime() <= fromBounds.start.getTime()) {
+      throw new AppError('`to` must be the same day as `from` or later', 400);
+    }
+
+    /**
+     * A bounded range, because this query has no pagination and a month view needs
+     * every appointment in it. 62 days covers the longest thing any view asks for —
+     * a month grid padded to whole weeks — while refusing a request for a decade.
+     */
+    const days = (toBounds.end.getTime() - fromBounds.start.getTime()) / 86_400_000;
+    if (days > 62) {
+      throw new AppError('Calendar ranges are limited to 62 days.', 400);
+    }
 
     return Appointment.find({
       businessId,
       status: { $ne: 'cancelled' },
-      startAt: { $gte: fromDate, $lte: toDate },
+      startAt: { $gte: fromBounds.start, $lt: toBounds.end },
     })
       .sort({ startAt: 1 })
       .populate('customerId', 'firstName lastName phone email address')

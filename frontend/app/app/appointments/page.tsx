@@ -12,8 +12,14 @@ import {
   DEFAULT_TIMEZONE,
   formatTimeInZone,
   hourLabel,
+  monthGridOf,
+  monthLabel,
+  monthOf,
   parseTimeOfDay,
   shiftDateKey,
+  shiftMonthKey,
+  shortDayLabel,
+  weekOf,
   weekdayForDateKey,
   zonedDateKey,
   zonedParts,
@@ -35,6 +41,7 @@ import {
   ChevronRight,
   List,
   CalendarDays,
+  CalendarRange,
   CheckCircle2,
   XCircle,
   Eye,
@@ -94,7 +101,14 @@ const PRIORITY_BADGES: Record<string, string> = {
 export default function AppointmentsPage() {
   // The toast hook was here only to fake a "route dispatched" confirmation for a
   // button that called no API. Removed with the rest of that panel.
-  const [viewMode, setViewMode] = useState<'calendar' | 'list' | 'map'>('calendar');
+  /**
+   * `week` and `month` are new. `calendar` stays the day timeline so nothing that links
+   * here changes meaning.
+   */
+  const [viewMode, setViewMode] = useState<'calendar' | 'week' | 'month' | 'list' | 'map'>(
+    'calendar'
+  );
+  const isRangeView = viewMode === 'week' || viewMode === 'month';
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -183,10 +197,66 @@ export default function AppointmentsPage() {
     return list;
   }, [appointments, timezone]);
 
+  /**
+   * The days a range view is showing. Empty for the day, list and map views.
+   *
+   * A month grid is padded to whole weeks, so it asks for up to 42 days — which is why
+   * the server's range cap is 62 and not 31.
+   */
+  const rangeDays = useMemo(() => {
+    if (viewMode === 'week') return weekOf(selectedDate);
+    if (viewMode === 'month') return monthGridOf(selectedDate);
+    return [];
+  }, [viewMode, selectedDate]);
+
   // Fetch appointments
   const fetchAppointments = useCallback(async () => {
     setLoading(true);
     try {
+      /**
+       * Range views use the calendar endpoint, which had existed since the beginning
+       * and never had a caller. It is unpaginated on purpose: a grid cannot place a
+       * job it was not sent, and "page 2 of Tuesday" is not a thing.
+       */
+      if (isRangeView) {
+        if (rangeDays.length === 0) return;
+        const found = await AppointmentService.getCalendar(
+          rangeDays[0],
+          rangeDays[rangeDays.length - 1]
+        );
+
+        /**
+         * Search and status are filtered client-side here.
+         *
+         * The calendar endpoint takes neither, and a grid holding at most a month of
+         * one contractor's jobs is small enough that adding two query parameters to a
+         * shared endpoint is the more expensive change. The day and list views still
+         * filter server-side, where paging makes it necessary.
+         */
+        const needle = search.trim().toLowerCase();
+        setAppointments(
+          found.filter((appt) => {
+            if (statusFilter !== 'all' && appt.status !== statusFilter) return false;
+            if (!needle) return true;
+            const cust = appt.customerId as any;
+            const haystack = [
+              appt.title,
+              typeof appt.address === 'string' ? appt.address : '',
+              cust?.firstName,
+              cust?.lastName,
+              cust?.phone,
+            ]
+              .filter(Boolean)
+              .join(' ')
+              .toLowerCase();
+            return haystack.includes(needle);
+          })
+        );
+        setTotal(found.length);
+        setTotalPages(1);
+        return;
+      }
+
       const params: any = {
         search: search.trim() || undefined,
         status: statusFilter !== 'all' ? statusFilter : undefined,
@@ -209,11 +279,29 @@ export default function AppointmentsPage() {
     } finally {
       setLoading(false);
     }
-  }, [viewMode, selectedDate, search, statusFilter, page]);
+  }, [viewMode, isRangeView, rangeDays, selectedDate, search, statusFilter, page]);
 
   useEffect(() => {
     fetchAppointments();
   }, [fetchAppointments]);
+
+  /**
+   * Jobs grouped by the local date they start on, for the week and month grids.
+   *
+   * Keyed with `zonedDateKey` in the business's timezone, so a 23:00 job lands in the
+   * cell a dispatcher would look for it in rather than on the following day.
+   */
+  const byDay = useMemo(() => {
+    const map = new Map<string, Appointment[]>();
+    appointments.forEach((appt) => {
+      const key = zonedDateKey(appt.startAt, timezone);
+      map.set(key, [...(map.get(key) ?? []), appt]);
+    });
+    map.forEach((list) =>
+      list.sort((a, b) => new Date(a.startAt).getTime() - new Date(b.startAt).getTime())
+    );
+    return map;
+  }, [appointments, timezone]);
 
   /**
    * Date navigation on the key itself.
@@ -221,9 +309,16 @@ export default function AppointmentsPage() {
    * `new Date('2026-09-21')` parses as UTC midnight; `setDate` then shifts it and
    * `toISOString()` re-reads it in UTC. For a viewer behind Greenwich the round trip
    * lost a day, so the arrows could stick or skip.
+   *
+   * The step follows the view: a week view pages by weeks and a month view by months,
+   * because an arrow that moves one day in a month grid moves nothing visible.
    */
   const changeDateByDays = (days: number) => {
-    setSelectedDate((current) => shiftDateKey(current, days));
+    setSelectedDate((current) => {
+      if (viewMode === 'week') return shiftDateKey(current, days * 7);
+      if (viewMode === 'month') return shiftMonthKey(current, days);
+      return shiftDateKey(current, days);
+    });
   };
 
   const setToday = () => {
@@ -265,7 +360,9 @@ export default function AppointmentsPage() {
 
   // KPI Metrics Calculation
   const stats = useMemo(() => {
-    const totalCount = viewMode === 'calendar' ? appointments.length : total;
+    // The day and range views hold everything they were sent, so their own length is
+    // the count. The list view is paged, so its total comes from the server.
+    const totalCount = viewMode === 'list' ? total : appointments.length;
     const confirmedCount = appointments.filter((a) => a.status === 'confirmed').length;
     const inProgressCount = appointments.filter((a) => a.status === 'in_progress').length;
     const urgentCount = appointments.filter((a) => a.priority === 'urgent').length;
@@ -358,7 +455,31 @@ export default function AppointmentsPage() {
                 }`}
               >
                 <CalendarDays className="w-3.5 h-3.5 text-blue-600" />
-                Day Timeline
+                Day
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode('week')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                  viewMode === 'week'
+                    ? 'bg-white text-slate-900 shadow-xs border border-slate-200/80'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <CalendarRange className="w-3.5 h-3.5 text-blue-600" />
+                Week
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode('month')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                  viewMode === 'month'
+                    ? 'bg-white text-slate-900 shadow-xs border border-slate-200/80'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <CalendarIcon className="w-3.5 h-3.5 text-blue-600" />
+                Month
               </button>
               <button
                 type="button"
@@ -414,11 +535,21 @@ export default function AppointmentsPage() {
                     <CalendarIcon className="w-3 h-3" />
                   </div>
                   <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                    {viewMode === 'calendar' ? 'Bookings Today' : 'Total Bookings'}
+                    {viewMode === 'calendar'
+                      ? 'Bookings Today'
+                      : viewMode === 'week'
+                        ? 'Bookings This Week'
+                        : viewMode === 'month'
+                          ? 'Bookings This Month'
+                          : 'Total Bookings'}
                   </span>
                 </div>
                 <Badge className="bg-blue-50 text-blue-700 border-blue-200 text-[9px] font-bold px-1.5 py-0">
-                  {viewMode === 'calendar' ? 'Selected Date' : 'All-time'}
+                  {viewMode === 'calendar'
+                    ? 'Selected Date'
+                    : isRangeView
+                      ? 'Selected Range'
+                      : 'All-time'}
                 </Badge>
               </div>
               <div className="mt-1.5 flex items-baseline justify-between">
@@ -541,13 +672,13 @@ export default function AppointmentsPage() {
         {/* Filters & Date Control Bar */}
         <div className="bg-white border border-slate-200/90 rounded-2xl p-3 sm:p-4 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-3">
           {/* Calendar Date Navigator */}
-          {viewMode === 'calendar' ? (
+          {viewMode === 'calendar' || isRangeView ? (
             <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
               <button
                 type="button"
                 onClick={() => changeDateByDays(-1)}
                 className="p-1.5 sm:p-2 rounded-xl bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 transition-colors"
-                title="Previous Day"
+                title={`Previous ${viewMode === 'month' ? 'month' : viewMode === 'week' ? 'week' : 'day'}`}
               >
                 <ChevronLeft className="w-4 h-4" />
               </button>
@@ -562,7 +693,7 @@ export default function AppointmentsPage() {
                 type="button"
                 onClick={() => changeDateByDays(1)}
                 className="p-1.5 sm:p-2 rounded-xl bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 transition-colors"
-                title="Next Day"
+                title={`Next ${viewMode === 'month' ? 'month' : viewMode === 'week' ? 'week' : 'day'}`}
               >
                 <ChevronRight className="w-4 h-4" />
               </button>
@@ -577,7 +708,12 @@ export default function AppointmentsPage() {
               <div className="hidden sm:flex items-center gap-1.5 px-3 py-1 bg-blue-50/70 border border-blue-100 rounded-xl">
                 <CalendarIcon className="w-3.5 h-3.5 text-blue-600" />
                 <span className="text-xs font-bold text-blue-900">
-                  {formatDateDisplay(selectedDate)}
+                  {/* The range being shown, not just the date that anchors it. */}
+                  {viewMode === 'month'
+                    ? monthLabel(selectedDate)
+                    : viewMode === 'week' && rangeDays.length === 7
+                      ? `${formatDateDisplay(rangeDays[0])} — ${formatDateDisplay(rangeDays[6])}`
+                      : formatDateDisplay(selectedDate)}
                 </span>
               </div>
             </div>
@@ -843,6 +979,214 @@ export default function AppointmentsPage() {
                       )}
                     </div>
                   </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : viewMode === 'week' ? (
+          /* ================= WEEK VIEW ================= */
+          <div className="bg-white border border-slate-200/90 rounded-2xl p-4 sm:p-6 shadow-xs space-y-4">
+            <div className="flex items-center justify-between pb-3.5 border-b border-slate-100">
+              <div className="space-y-0.5">
+                <h2 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                  <CalendarRange className="w-4 h-4 text-blue-600" />
+                  Week of {formatDateDisplay(rangeDays[0] ?? selectedDate)}
+                  {zoneLabel ? (
+                    <span className="text-[11px] font-semibold text-slate-500">
+                      all times {zoneLabel}
+                    </span>
+                  ) : null}
+                </h2>
+                <p className="text-xs text-slate-500">
+                  Seven days at a glance. Click a day to open its hourly timeline.
+                </p>
+              </div>
+              <Badge className="bg-slate-100 text-slate-700 border-slate-200 text-xs font-bold px-2.5 py-0.5">
+                {appointments.length} Booking{appointments.length === 1 ? '' : 's'}
+              </Badge>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-7 gap-2.5">
+              {rangeDays.map((dayKey) => {
+                const jobs = byDay.get(dayKey) ?? [];
+                const isToday = dayKey === zonedDateKey(new Date(), timezone);
+
+                /**
+                 * Closed days are shown greyed rather than hidden. A dispatcher looking
+                 * for Sunday needs to see that Sunday exists and the business is shut,
+                 * not find a six-column week.
+                 */
+                const dayHours = business?.businessHours?.find(
+                  (h) => h.day.toLowerCase() === weekdayForDateKey(dayKey).toLowerCase()
+                );
+                const closed = dayHours ? !dayHours.isOpen : false;
+
+                return (
+                  <div
+                    key={dayKey}
+                    className={`rounded-xl border p-2.5 space-y-2 min-h-[140px] ${
+                      isToday
+                        ? 'border-blue-300 bg-blue-50/40'
+                        : closed
+                          ? 'border-slate-200 bg-slate-50/80'
+                          : 'border-slate-200 bg-white'
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedDate(dayKey);
+                        setViewMode('calendar');
+                      }}
+                      className="w-full text-left group"
+                    >
+                      <span
+                        className={`text-xs font-black tracking-tight ${
+                          isToday ? 'text-blue-700' : 'text-slate-800'
+                        } group-hover:text-blue-600`}
+                      >
+                        {shortDayLabel(dayKey)}
+                      </span>
+                      {closed ? (
+                        <span className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
+                          Closed
+                        </span>
+                      ) : (
+                        <span className="block text-[10px] text-slate-500 font-medium">
+                          {jobs.length} job{jobs.length === 1 ? '' : 's'}
+                        </span>
+                      )}
+                    </button>
+
+                    <div className="space-y-1.5">
+                      {jobs.map((apt) => {
+                        const cust = apt.customerId as any;
+                        const id = apt._id || (apt as any).id;
+                        const statusConf = STATUS_CONFIG[apt.status] || STATUS_CONFIG.scheduled;
+
+                        return (
+                          <Link
+                            key={id}
+                            href={`/app/appointments/${id}`}
+                            className="block rounded-lg border border-slate-200 bg-white px-2 py-1.5 hover:border-blue-300 hover:bg-blue-50/40 transition-colors"
+                          >
+                            <div className="flex items-center gap-1.5">
+                              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${statusConf.dot}`} />
+                              <span className="text-[11px] font-bold text-slate-900 tabular-nums">
+                                {formatTime(apt.startAt)}
+                              </span>
+                            </div>
+                            <span className="block text-[11px] text-slate-600 font-medium truncate">
+                              {cust?.firstName} {cust?.lastName}
+                            </span>
+                            {(apt as any).technicianName ? (
+                              <span className="block text-[10px] text-slate-400 truncate">
+                                {(apt as any).technicianName}
+                              </span>
+                            ) : null}
+                          </Link>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : viewMode === 'month' ? (
+          /* ================= MONTH VIEW ================= */
+          <div className="bg-white border border-slate-200/90 rounded-2xl p-4 sm:p-6 shadow-xs space-y-4">
+            <div className="flex items-center justify-between pb-3.5 border-b border-slate-100">
+              <div className="space-y-0.5">
+                <h2 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                  <CalendarIcon className="w-4 h-4 text-blue-600" />
+                  {monthLabel(selectedDate)}
+                  {zoneLabel ? (
+                    <span className="text-[11px] font-semibold text-slate-500">
+                      all times {zoneLabel}
+                    </span>
+                  ) : null}
+                </h2>
+                <p className="text-xs text-slate-500">
+                  Workload by day. Click a day to open its hourly timeline.
+                </p>
+              </div>
+              <Badge className="bg-slate-100 text-slate-700 border-slate-200 text-xs font-bold px-2.5 py-0.5">
+                {appointments.length} Booking{appointments.length === 1 ? '' : 's'}
+              </Badge>
+            </div>
+
+            <div className="grid grid-cols-7 gap-1 sm:gap-1.5">
+              {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((label) => (
+                <div
+                  key={label}
+                  className="text-[10px] font-bold uppercase tracking-wider text-slate-400 text-center pb-1"
+                >
+                  {label}
+                </div>
+              ))}
+
+              {rangeDays.map((dayKey) => {
+                const jobs = byDay.get(dayKey) ?? [];
+                const isToday = dayKey === zonedDateKey(new Date(), timezone);
+                // Padding days from the neighbouring months are dimmed, not blank: the
+                // grid stays rectangular and a job on the 1st is still reachable.
+                const inMonth = monthOf(dayKey) === monthOf(selectedDate);
+
+                return (
+                  <button
+                    key={dayKey}
+                    type="button"
+                    onClick={() => {
+                      setSelectedDate(dayKey);
+                      setViewMode('calendar');
+                    }}
+                    className={`text-left rounded-lg border p-1.5 min-h-[78px] transition-colors ${
+                      isToday
+                        ? 'border-blue-300 bg-blue-50/50'
+                        : inMonth
+                          ? 'border-slate-200 bg-white hover:border-blue-300 hover:bg-blue-50/30'
+                          : 'border-slate-100 bg-slate-50/60 hover:border-slate-200'
+                    }`}
+                  >
+                    <span
+                      className={`text-[11px] font-black tabular-nums ${
+                        isToday
+                          ? 'text-blue-700'
+                          : inMonth
+                            ? 'text-slate-800'
+                            : 'text-slate-400'
+                      }`}
+                    >
+                      {Number(dayKey.slice(8))}
+                    </span>
+
+                    <div className="mt-1 space-y-0.5">
+                      {/*
+                        Two jobs plus a count, rather than an unbounded stack that makes
+                        one busy day taller than the rest of the grid.
+                      */}
+                      {jobs.slice(0, 2).map((apt) => {
+                        const statusConf = STATUS_CONFIG[apt.status] || STATUS_CONFIG.scheduled;
+                        const cust = apt.customerId as any;
+                        return (
+                          <span
+                            key={apt._id || (apt as any).id}
+                            className="flex items-center gap-1 text-[10px] text-slate-600 font-medium truncate"
+                          >
+                            <span className={`w-1 h-1 rounded-full shrink-0 ${statusConf.dot}`} />
+                            <span className="tabular-nums shrink-0">{formatTime(apt.startAt)}</span>
+                            <span className="truncate">{cust?.lastName || cust?.firstName || ''}</span>
+                          </span>
+                        );
+                      })}
+                      {jobs.length > 2 ? (
+                        <span className="block text-[10px] font-bold text-blue-600">
+                          +{jobs.length - 2} more
+                        </span>
+                      ) : null}
+                    </div>
+                  </button>
                 );
               })}
             </div>

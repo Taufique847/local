@@ -136,7 +136,7 @@ Subtotal: **22.5 days** of feature work.
 - **#41** — the "6 literals in a switch" is now one templates module covering both channels, and `renderTemplate` still does not receive a `businessId`. The per-business override model and editor are untouched, so the 2-day estimate stands.
 - **Days 14–15 (#42)** — done. The duplicated arithmetic is one `PricingService`; travel fees, discounts and the never-billed `emergencyFee` all work. One line of that row's "missing" column is deliberately **not** closed: *"tax is one flat blended rate; customer state/zip never consulted"*. A per-jurisdiction tax table is a different feature from a pricing engine, and guessing a rate from a ZIP is worse than using the rate the business entered. It is recorded in the Day 24 close-out instead.
 
-**~8 days remain** of the original 24: Day 1 (defects), Days 2–13, Day 13½, Days 14–15 and Day 16 are done, leaving Days 17–24 — the rest of the calendar (#14), real dispatch (#18) and close-out.
+**~7 days remain** of the original 24: Day 1 (defects), Days 2–13, Day 13½, Days 14–15 and Days 16–17 are done, leaving Days 18–24 — drag-and-drop and recurrence (#14), real dispatch (#18) and close-out.
 
 Of the nine partial features, **seven are now complete**: #38, #39, #41, #10, #13 and #42, plus #18's `technicianId` prerequisite from Day 0. The two genuinely outstanding are the calendar (#14) and dispatch (#18), which is exactly the 15-day cut described below — and the reason it was the recommended one.
 
@@ -336,9 +336,30 @@ The technician is now resolved **before** the conflict check on the create path.
 
 Two survivors also exposed a real gap rather than dead code: nothing asserted that a **crewless** business gets *available* slots. A capacity of zero would have made `overlapping < capacity` false everywhere and reported an empty calendar as fully booked — for the default account, which has no technician records at all.
 
+#### Day 17 · week and month views — ✅ **done**
+
+The range endpoint now has a caller, and 13 more tests (58 in the scheduling file), **13 mutations attempted, 13 caught**.
+
+**The endpoint had two defects nobody had ever seen**, because nothing called it:
+
+- `new Date('2026-09-21')` parses as UTC midnight, so the range was a UTC one. For a Dallas business a "week" began at 19:00 the previous Sunday.
+- `$lte: toDate` put the upper boundary at midnight *starting* the `to` date, so the last day of every range was empty. A Monday-to-Sunday week view would have shown six days.
+
+Both ends are now half-open on the local day, with a test at each boundary — the 22:00 job on the final day is in, the 23:00 job the evening before the range is out, and the 00:00 job the day after `to` is out so two adjacent weeks cannot both claim it.
+
+**Bounded at 62 days.** The query has no pagination because a grid cannot place a job it was not sent, so the range itself is the limit. 62 and not 31 because a month grid pads to whole weeks and legitimately asks for up to 42 days — there is a test for each of those two numbers.
+
+**Views.** Week is seven day columns; month is a padded rectangular grid showing two jobs per cell plus a "+N more". Both click through to the day timeline. Closed days are greyed rather than hidden: a dispatcher looking for Sunday needs to see that Sunday exists and the shop is shut, not find a six-column week. Padding days from neighbouring months are dimmed rather than blank, so a job on the 1st stays reachable.
+
+**Grouping is by local date**, via `zonedDateKey` in the business timezone, so a 23:00 job lands in the cell someone would look for it in.
+
+**Search and status filter client-side in the range views.** The calendar endpoint takes neither, and at most a month of one contractor's jobs is small enough that adding two parameters to a shared endpoint is the more expensive change. The day and list views still filter server-side, where paging makes it necessary. Stated here because it is a deliberate asymmetry rather than an oversight.
+
+**Navigation follows the view** — the arrows page by week in the week view and by month in the month view, since an arrow that moves one day in a month grid moves nothing visible. `shiftMonthKey` clamps the day, because `Date.UTC(y, m + 1, 31)` rolls over and paging from 31 January would land in March and skip February.
+
 #### Remaining
 
-- **Day 17** — Week and month views, finally calling the `getCalendarAppointments` range endpoint that has existed and gone unused. Technician lanes in the day view (possible only after BUG-B).
+- **Technician lanes** in the day view are not built. Deliberately deferred: they are the one part of Day 17 that is presentation rather than correctness, and Day 20's technician picker is what makes them worth having — most jobs are still unassigned.
 - **Day 18** — Drag-and-drop to reschedule, routed through `rescheduleAppointment` so the lock, conflict re-check and `rescheduleHistory` all still apply. Optimistic UI with rollback on a 409. Note `rescheduleAppointment` currently re-checks slot overlap but **not** business hours — add that, or a drag onto a closed Sunday will succeed.
 - **Day 19** — Recurring appointments: `recurrenceRule` + `recurrenceParentId`, generation horizon, and edit-one-vs-edit-series. Deliberately last in this group — it is the piece a maintenance-plan feature later depends on, and the easiest to defer.
 
