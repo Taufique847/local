@@ -34,7 +34,17 @@ export class WorkerService {
     data: {
       checklist?: Array<{ item: string; completed: boolean }>;
       photos?: Array<{ url: string; caption?: string; phase: 'before' | 'after' }>;
-      partsUsed?: Array<{ partName: string; quantity: number; unitCost: number; totalCost: number }>;
+      /**
+       * `totalCost` is optional because nothing should send it: `PricingService` recomputes
+       * every line total from quantity and unit cost, so a value supplied here is ignored.
+       * Requiring it invited callers to compute money in the browser.
+       */
+      partsUsed?: Array<{
+        partName: string;
+        quantity: number;
+        unitCost: number;
+        totalCost?: number;
+      }>;
       internalNotes?: string;
     }
   ): Promise<any> {

@@ -67,19 +67,31 @@ export class AvailabilityService {
       overlap._id = { $ne: options.excludeAppointmentId };
     }
 
+    /**
+     * A named booking has to clear **both** questions, not just the first.
+     *
+     * Asking only "is this person free?" leaves a real hole: with a crew of two and two
+     * *unassigned* jobs already overlapping, neither of them is attached to Technician A,
+     * so A looks free — and accepting the booking gives a two-person crew three concurrent
+     * jobs. The unassigned work still needs both of them.
+     *
+     * So the person's own diary is checked, and then the same capacity question an
+     * unassigned booking asks. Naming someone narrows who can do the job; it does not
+     * conjure a third technician.
+     */
     if (options.technicianId) {
       const clash = await Appointment.findOne({ ...overlap, technicianId: options.technicianId })
         .select('technicianName startAt')
         .lean();
 
-      if (!clash) return { conflict: false };
-
-      return {
-        conflict: true,
-        reason: clash.technicianName
-          ? `${clash.technicianName} is already booked for that time.`
-          : 'That technician is already booked for that time.',
-      };
+      if (clash) {
+        return {
+          conflict: true,
+          reason: clash.technicianName
+            ? `${clash.technicianName} is already booked for that time.`
+            : 'That technician is already booked for that time.',
+        };
+      }
     }
 
     const [overlapping, crewSize] = await Promise.all([

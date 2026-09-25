@@ -409,24 +409,56 @@ export const updateLeadSchema = createLeadSchema
     message: 'Provide at least one field to update',
   });
 
-export const createAppointmentSchema = z.object({
-  customerId: objectId,
-  serviceId: objectId,
-  leadId: objectId.optional(),
-  // Coerced to a Date so an unparseable value is a 400 here rather than an
-  // `Invalid Date` reaching the conflict check.
-  startAt: z.coerce.date({ errorMap: () => ({ message: 'Enter a valid start date and time' }) }),
-  endAt: z.coerce.date().optional(),
-  description: trimmed(2000).optional(),
-  address: trimmed(300).optional(),
-  priority: z.enum(['low', 'medium', 'high', 'urgent']).optional(),
-  source: z.enum(['manual', 'ai_call', 'website', 'referral', 'other']).optional(),
-  // The real assignment. `technicianName` is derived from this when present.
-  technicianId: objectId.optional(),
-  technicianName: trimmed(120).optional(),
-  customerNotes: trimmed(2000).optional(),
-  internalNotes: trimmed(2000).optional(),
+/**
+ * A repeating schedule.
+ *
+ * Shape only. The cross-field rule — exactly one of `count` or `until` — lives in
+ * `RecurrenceService.normaliseRule`, because that is also the entry point the top-up job
+ * and any future importer go through, and a rule enforced only at the HTTP edge is a rule
+ * with a way around it.
+ */
+export const recurrenceRuleSchema = z.object({
+  frequency: z.enum(['weekly', 'monthly']),
+  interval: z.coerce.number().int().min(1).max(52).default(1),
+  /** Total visits including the first. */
+  count: z.coerce.number().int().min(2).max(260).optional(),
+  until: z.coerce.date().optional(),
 });
+
+export const createAppointmentSchema = z
+  .object({
+    customerId: objectId,
+    serviceId: objectId,
+    leadId: objectId.optional(),
+    recurrence: recurrenceRuleSchema.optional(),
+    // Coerced to a Date so an unparseable value is a 400 here rather than an
+    // `Invalid Date` reaching the conflict check.
+    startAt: z.coerce.date({ errorMap: () => ({ message: 'Enter a valid start date and time' }) }),
+    endAt: z.coerce.date().optional(),
+    description: trimmed(2000).optional(),
+    address: trimmed(300).optional(),
+    priority: z.enum(['low', 'medium', 'high', 'urgent']).optional(),
+    source: z.enum(['manual', 'ai_call', 'website', 'referral', 'other']).optional(),
+    // The real assignment. `technicianName` is derived from this when present.
+    technicianId: objectId.optional(),
+    technicianName: trimmed(120).optional(),
+    customerNotes: trimmed(2000).optional(),
+    internalNotes: trimmed(2000).optional(),
+  })
+  /**
+   * The same chronology check the reschedule schema carries.
+   *
+   * It was added there and not here, which is worse than never having it: the create path
+   * is the one the AI, the dashboard and the portal all use. An inverted window saves
+   * cleanly, because the overlap query for `startAt < endAt` and `endAt > startAt` matches
+   * nothing when the two are the wrong way round — so the appointment is invisible to every
+   * conflict check forever, and carries a negative duration that every later reschedule
+   * inherits.
+   */
+  .refine((data) => !data.endAt || data.endAt.getTime() > data.startAt.getTime(), {
+    message: 'The end time must be after the start time',
+    path: ['endAt'],
+  });
 
 /**
  * PUT /api/appointments/:id
@@ -717,4 +749,15 @@ export const workerJobStatusSchema = z.object({
   latitude: z.coerce.number().min(-90).max(90).optional(),
   longitude: z.coerce.number().min(-180).max(180).optional(),
   address: trimmed(300).optional(),
+});
+
+/**
+ * POST /api/appointments/:id/cancel-series
+ *
+ * `from` defaults to now in the service. Accepted so an owner can end a plan from a
+ * chosen date rather than only from today — "stop after the March visit".
+ */
+export const cancelSeriesSchema = z.object({
+  from: z.coerce.date().optional(),
+  reason: trimmed(500).optional(),
 });

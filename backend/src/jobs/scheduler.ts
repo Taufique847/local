@@ -2,6 +2,7 @@ import * as cron from 'node-cron';
 import { LeadRecoveryService } from '../services/lead-recovery.service';
 import { ReviewReputationService } from '../services/review-reputation.service';
 import { AppointmentReminderService } from '../services/appointment-reminder.service';
+import { RecurrenceService } from '../services/recurrence.service';
 import { BillingService } from '../services/billing.service';
 import { DataRetentionService } from '../services/data-retention.service';
 import { LockService } from '../services/lock.service';
@@ -97,6 +98,22 @@ export class JobScheduler {
       // Comfortably longer than a full 500-appointment batch, so the lock cannot
       // expire mid-run and admit a second instance.
       lockTtlMs: 10 * 60_000,
+    },
+    {
+      name: 'recurrence_topup',
+      /**
+       * Twice a day, off-peak.
+       *
+       * A series is materialised 120 days ahead, so the window only needs extending on a
+       * scale of weeks — running this every minute would ask the same question thousands
+       * of times for an answer that changes once a quarter. Twice rather than once so a
+       * single missed run is not a whole day of drift, and off-peak because it takes the
+       * per-business booking lock and should not be competing with live bookings for it.
+       */
+      schedule: '25 4,16 * * *',
+      run: () => RecurrenceService.topUpSeries(),
+      // Comfortably longer than 500 series each generating up to 60 occurrences.
+      lockTtlMs: 30 * 60_000,
     },
     {
       name: 'expire_trials',

@@ -1269,3 +1269,69 @@ describe('the dispatch route carries the travel fee through to the zone', () => 
     expect(await PricingService.travelFeeForZip(shop.businessId, '75001')).toBe(85);
   });
 });
+
+describe('parts logged from the field app are actually billed', () => {
+  it('bills a part at the unit cost the technician entered', async () => {
+    /**
+     * The worker PWA posted `unitPrice` for each part. `Appointment.partsUsed` carries
+     * `unitCost`, and Mongoose silently discards a key its subdocument schema does not
+     * have — so `unitCost` fell to its default of 0 and **every part logged in the field
+     * was billed at $0.00**. The only visible symptom was the list rendering
+     * `$undefined/unit`.
+     *
+     * The same class as the `svc.price` / `startingPrice` mismatch that made every field
+     * invoice $189. This test goes through the route the app uses, so the field name is
+     * part of what it checks: the earlier pricing tests seeded `partsUsed` directly with
+     * the correct key and could never have caught it.
+     */
+    const shop = await createWorkspace();
+    await BusinessPolicy.create({
+      businessId: shop.businessId,
+      taxRate: 0,
+      diagnosticFee: 0,
+    });
+
+    const customer = await createCustomerRecord(shop.businessId);
+    const service = await Service.create({
+      businessId: shop.businessId,
+      name: 'AC Repair',
+      category: 'Cooling',
+      startingPrice: 200,
+      durationMinutes: 90,
+      status: 'active',
+    });
+    const startAt = new Date(Date.now() + 60 * 60 * 1000);
+    const appointment = await Appointment.create({
+      businessId: shop.businessId,
+      customerId: customer._id,
+      serviceId: service._id,
+      startAt,
+      endAt: new Date(startAt.getTime() + 90 * 60 * 1000),
+      status: 'in_progress',
+      priority: 'low',
+      timezone: 'UTC',
+      address: '1 Test St, Testville, TX 75001',
+    });
+
+    // Exactly the shape the field app now sends.
+    const logged = await asUser(shop.ownerToken)
+      .patch(`/api/worker/jobs/${appointment._id}/execution`)
+      .send({ partsUsed: [{ partName: 'Capacitor', quantity: 2, unitCost: 30 }] });
+
+    expect(logged.status).toBe(200);
+
+    const stored = await Appointment.findById(appointment._id);
+    expect((stored as any).partsUsed[0].unitCost).toBe(30);
+
+    const { invoice } = await WorkerService.completeJobAndGenerateInvoice(
+      shop.businessId,
+      appointment._id.toString(),
+      {}
+    );
+
+    const part = invoice.items.find((i: any) => /Capacitor/.test(i.description));
+    expect(part?.unitPrice).toBe(30);
+    expect(part?.total).toBe(60);
+    expect(invoice.subtotal).toBe(260);
+  });
+});

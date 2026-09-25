@@ -136,7 +136,7 @@ Subtotal: **22.5 days** of feature work.
 - **#41** — the "6 literals in a switch" is now one templates module covering both channels, and `renderTemplate` still does not receive a `businessId`. The per-business override model and editor are untouched, so the 2-day estimate stands.
 - **Days 14–15 (#42)** — done. The duplicated arithmetic is one `PricingService`; travel fees, discounts and the never-billed `emergencyFee` all work. One line of that row's "missing" column is deliberately **not** closed: *"tax is one flat blended rate; customer state/zip never consulted"*. A per-jurisdiction tax table is a different feature from a pricing engine, and guessing a rate from a ZIP is worse than using the rate the business entered. It is recorded in the Day 24 close-out instead.
 
-**~6 days remain** of the original 24: Day 1 (defects), Days 2–13, Day 13½, Days 14–15 and Days 16–18 are done, leaving Days 19–24 — recurrence (#14), real dispatch (#18) and close-out.
+**~5 days remain** of the original 24: Day 1 (defects), Days 2–13, Day 13½, Days 14–15 and Days 16–19 are done, leaving Days 20–24 — real dispatch (#18) and close-out.
 
 Of the nine partial features, **seven are now complete**: #38, #39, #41, #10, #13 and #42, plus #18's `technicianId` prerequisite from Day 0. The two genuinely outstanding are the calendar (#14) and dispatch (#18), which is exactly the 15-day cut described below — and the reason it was the recommended one.
 
@@ -385,8 +385,50 @@ Dropping onto an hour row in the day view sets that hour. Dropping onto a day ce
 - **The cancel schema looked redundant**: `Appointment.cancellationReason` already carries `maxlength: 500`, so Mongoose refuses an over-long reason either way. It refuses it as `cancellationReason` though — the internal column, after a database round trip — while the request field is `reason`, and a form cannot highlight an input it has no name for. The test now asserts which field is named, which is the observable difference.
 
 #### Remaining
-- **Day 19** — Recurring appointments: `recurrenceRule` + `recurrenceParentId`, generation horizon, and edit-one-vs-edit-series. Deliberately last in this group — it is the piece a maintenance-plan feature later depends on, and the easiest to defer.
+#### Day 19 · recurring appointments — ✅ **done**
+
+`RecurrenceService`, 53 tests in `backend/tests/scheduling/recurrence.test.ts`, **63 mutations attempted across seven passes, 63 caught**. This is the last piece of #14.
+
+**Three decisions shape all of it**
+
+1. **Occurrences are real appointments, not computed on read.** A technician is assigned to a specific visit; that visit gets rescheduled, invoiced and photographed and has its own `rescheduleHistory`. A virtual occurrence has nowhere to put any of that. The cost is materialisation, which is what the horizon, the watermark and the top-up job exist to manage.
+2. **A series is generated to a 120-day horizon, not in full.** Writing three years of weekly visits eagerly buries the calendar in work nobody has committed to. 120 days rather than `maxBookingHorizonDays` (30) because that setting exists to stop a *customer* booking too far out, and capping a contractor's own maintenance plan at a month would make quarterly plans invisible.
+3. **An occurrence that cannot be booked is skipped, not forced and not fatal.** A monthly plan on the 15th lands on a closed Sunday twice a year. Failing the whole plan is useless; creating it anyway books work nobody will do. The skipped dates and the reason are returned.
+
+**Design notes worth keeping**
+
+- **Only `weekly` and `monthly`, with an `interval`.** Fortnightly is weekly/2, quarterly is monthly/3, annual is monthly/12. A `quarterly` value would be a third spelling of something `monthly`/3 already says, and each extra frequency brings its own month-end edge cases.
+- **Every occurrence is derived from index 0, never from the previous one.** 52 weekly steps across two DST transitions drifts by an hour, so a 09:00 visit silently becomes 08:00 and stays there. Computing from the first occurrence through `zonedWallClockToUtc` means every visit lands at 09:00 local whatever that week's offset is — the first real payoff of the Day 16 primitive.
+- **A missing day of the month is skipped, not clamped.** A plan set for the 31st would otherwise fire on the 30th of April and the 28th of February, so the interval between visits silently varies and a customer told "the 31st" is visited on four different dates.
+- **An unbounded series is refused.** It cannot be materialised in full by definition, so accepting one would mean the plan exists only as far as the last top-up ran — and a contractor who disabled the scheduler would find their calendar stopping on a date nothing chose.
+- **The rule lives on the parent only.** Copying it onto every occurrence would mean a change to the plan had to be written to every row, and a partial write would leave two visits of one series disagreeing about what the series is.
+- **`recurrenceCompletedAt`, because the watermark cannot answer "is this finished".** A four-visit plan ends with its watermark three weeks out, comfortably inside the horizon, so the top-up query would select it forever and take the per-business booking lock each time to discover there is nothing to do. Generation now records *why* it stopped — plan ended, or horizon reached — and only the first is final.
+- **Cancelling one visit is not ending the plan.** `cancel-series` is a separate route from `cancel` for exactly that reason, and it works from any occurrence, leaves completed visits alone, and clears the rule so the top-up job stops re-creating what was just cancelled.
+
+**What the mutation passes found**
+
+- **`interval: 0` silently became weekly.** `Math.trunc(Number(rule.interval) || 1)` — the same `||`-swallows-an-explicit-zero mistake this plan has been fixing all the way through. A typo in a form would have created 52 visits a year nobody asked for.
+- **A filter that was actively wrong.** `status: { $nin: ['cancelled'] }` on the top-up query looked like obvious hygiene. It meant cancelling the *first visit* silently stopped the next year of them — the exact accidental-cancellation failure `cancel-series` exists to prevent. Removed, with a test asserting the plan continues.
+- **Two clauses that could never exclude a row.** `recurrenceGeneratedThrough: { $lt: horizon }` — generation stops *at* the horizon and the horizon only moves forward, so every unfinished series already satisfies it. And `recurrenceParentId: null`, redundant because occurrences never carry a rule. Both deleted.
+- **Three tests that passed without testing anything.** A closed-day test that closed a day none of the occurrences fell on; a `leadId` test on a series that had no lead; a `listSeries` test that only ever asked from the parent, where the parent resolution is a no-op. All three now exercise the thing they claim to.
+- **One clause kept despite being unreachable**, and said so in place: the `businessId` on the bulk `updateMany` in `cancelSeries`. The invariant making it redundant lives in a lookup ten lines above, a refactor could move that lookup with no test failing, and the failure it guards — a one-tenant update becoming an every-tenant one — is unrecoverable.
+
+**A process failure worth recording.** A mutation run was killed by a 30-minute timeout while a mutation was applied, so the `finally` that restores the file never ran. Every subsequent mutation then "passed" — the suite was already red, so of course it failed again — and a run of 47 results was worthless while looking entirely normal. The harness now verifies the baseline is green before it starts, and long runs are split into batches.
+
+#### Three defects in this session's own work, found by an independent audit
+
+An `newbugs.md` audit of the current code was written in parallel by another pass over the repo. Three of its twelve findings landed on code from Days 14–19 and are fixed here; **the remaining nine are left open on purpose** — they are in modules this plan has not reached (regex escaping across search endpoints, TCPA quiet-hours in the drip scheduler, service-route validation, campaign batching, the AI's service-category enum, Customer 360's missing financials) and mixing them in would blur what Days 14–19 actually changed.
+
+- **A part logged in the field app was billed at $0.00.** The worker PWA posted `unitPrice`; `Appointment.partsUsed` carries `unitCost`, and Mongoose silently discards a key its subdocument schema does not have, so `unitCost` fell to its default of 0. Exactly the same class as the Day 0 `svc.price` / `startingPrice` defect that made every field invoice $189. The Day 14 pricing tests could never have caught it, because they seeded `partsUsed` directly with the correct key — the new test goes through the route the app actually calls.
+- **The chronology check was on the reschedule schema and not on create**, which is the worse way round: create is the path the AI, the dashboard and the portal all use. An inverted window saves cleanly, because the overlap predicate matches nothing when the two are reversed, so the appointment is invisible to every conflict check forever.
+- **A named booking ignored crew capacity.** The Day 16 design asked only "is this person free?" when a technician was named. With a crew of two and two *unassigned* overlapping jobs, neither is attached to Technician A, so A looked free — and accepting gave a two-person crew three concurrent jobs. A named booking now has to clear both questions: naming someone narrows who can do the work, it does not conjure a third technician.
+
+The third is the one worth dwelling on, because it was a hole in a fix rather than in old code — and the tests written alongside it all passed. Every case they covered had the overlapping work *assigned*, which is the case where checking one diary is sufficient.
+
+#### Remaining
+
 - **Technician lanes** in the day view. Deferred from Day 17: presentation rather than correctness, and worth having once Day 20's picker means jobs are routinely assigned.
+- **A recurrence control in the booking UI.** The API accepts `recurrence` on create and the series endpoints work; the modal does not offer it yet.
 
 ### Days 20–23 · Feature 18: real dispatch
 - **Day 20** — Assignment as a first-class action. A technician picker in the booking modal and on the appointment detail page, writing `technicianId`. Call `findOptimalTechnician` at booking time to *suggest* (not silently impose) an assignment, and persist the result — today it returns a suggestion to nobody. Filter by `status` and skills, which the current matcher ignores.

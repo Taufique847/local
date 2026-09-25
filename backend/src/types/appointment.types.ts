@@ -58,6 +58,23 @@ export interface IPartUsed {
   totalCost: number;
 }
 
+export type RecurrenceFrequency = 'weekly' | 'monthly';
+
+/**
+ * A repeating schedule. See the model for why there are only two frequencies.
+ *
+ * `count` and `until` are alternatives; exactly one is required.
+ */
+export interface IRecurrenceRule {
+  frequency: RecurrenceFrequency;
+  /** Every N weeks or months. Fortnightly is weekly/2, quarterly is monthly/3. */
+  interval: number;
+  /** Total occurrences including the first. */
+  count?: number;
+  /** Last date an occurrence may start on, inclusive. */
+  until?: Date;
+}
+
 export interface IAppointment extends Document {
   _id: Types.ObjectId;
   businessId: Types.ObjectId;
@@ -84,6 +101,14 @@ export interface IAppointment extends Document {
   /** Set when the customer replies to confirm. Not the same as `status: 'confirmed'`. */
   confirmedByCustomerAt?: Date | null;
   rescheduleHistory: IRescheduleRecord[];
+  /** Set on the first appointment of a repeating series only. */
+  recurrenceRule?: IRecurrenceRule | null;
+  /** Set on every occurrence after the first; null on the parent. */
+  recurrenceParentId?: Types.ObjectId | null;
+  /** How far the series has been materialised. On the parent. */
+  recurrenceGeneratedThrough?: Date | null;
+  /** Set once the series has no occurrences left. See the model for why. */
+  recurrenceCompletedAt?: Date | null;
   checkIn?: ICheckInInfo;
   checkOut?: ICheckInInfo;
   checklist?: IJobChecklistItem[];
@@ -119,6 +144,11 @@ export interface CreateAppointmentInput {
    * that has not created technician records yet.
    */
   technicianName?: string;
+  /**
+   * Makes this the first visit of a repeating series. The rest are generated after the
+   * booking lock is released, up to `RecurrenceService.HORIZON_DAYS`.
+   */
+  recurrence?: IRecurrenceRule;
   priority?: AppointmentPriority;
   source?: AppointmentSource;
   customerNotes?: string;

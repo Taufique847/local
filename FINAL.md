@@ -1,6 +1,6 @@
 # BlueCollar AI — Final Feature Status
 
-> **Verified:** 23 September 2026, by reading `backend/src` and `frontend/app` directly, by running the built server against a live database, and by a 568-test automated suite whose guards were each confirmed by deliberately breaking them.
+> **Verified:** 23 September 2026, by reading `backend/src` and `frontend/app` directly, by running the built server against a live database, and by a 628-test automated suite whose guards were each confirmed by deliberately breaking them.
 >
 > Reference vision: `targetFeaturesIdea.md` (86 numbered features, sections A–J).
 > This file supersedes the status sections of `PROJECT_STATUS_AND_ROADMAP.md`, which was written before the Week 1–4 hardening, Tier 1/Tier 2 work and QA bug fixes landed.
@@ -11,10 +11,10 @@
 
 | Measure | Value |
 |---|---|
-| Features **fully built and verified** | **38 of 86** (~44%) |
-| Features **partially built** (usable but incomplete) | **3 of 86** (~3%) |
+| Features **fully built and verified** | **39 of 86** (~45%) |
+| Features **partially built** (usable but incomplete) | **2 of 86** (~2%) |
 | Features **not started** | **45 of 86** (~52%) |
-| Weighted completion against the full vision | **~46%** (built = 1, partial = 0.5 → 38 + 1.5 = 39.5 of 86) |
+| Weighted completion against the full vision | **~47%** (built = 1, partial = 0.5 → 39 + 1 = 40 of 86) |
 | Completion against a **launchable MVP** (§7 of the vision doc) | **~90%** |
 
 Two different questions, two different answers:
@@ -56,7 +56,7 @@ Each row was confirmed in code, and where marked ✓runtime, exercised against a
 
 | # | Feature | Status | Notes |
 |---|---|---|---|
-| 14 | Unified calendar | 🟡 Partial | Day, week and month views, all in the business's timezone, with drag-and-drop reschedule that routes through the locked path so opening hours, the booking horizon and the per-technician conflict check all still apply — optimistically, with rollback and the server's own reason on a refusal. Every offered slot is now one the booking path accepts, which was not true before: roughly half of each day was a 409 in waiting. Conflicts are per technician, so a crew can hold concurrent jobs. Still missing recurring appointments and technician lanes. |
+| 14 | Unified calendar | ✅ Built | Day, week and month views, all in the business's timezone, with drag-and-drop reschedule that routes through the locked path so opening hours, the booking horizon and the per-technician conflict check all still apply — optimistically, with rollback and the server's own reason on a refusal. Every offered slot is now one the booking path accepts, which was not true before: roughly half of each day was a 409 in waiting. Conflicts are per technician, so a crew can hold concurrent jobs. Recurring appointments are real appointments generated to a 120-day horizon and topped up by the scheduler, with edit-one and end-the-series as distinct actions. Two presentation gaps remain, listed in §5: technician lanes in the day view, and a recurrence control in the booking modal (the API takes it; the form does not offer it). |
 | 16 | Service catalog | ✅ Built | Duration, price, category, skill, emergency flag. Starter catalogue now matches the trade. ✓runtime |
 | 17 | Booking rules | ✅ Built | Hours, minimum notice, booking horizon, emergency keywords, service-zone check. |
 | 18 | Dispatch assignment | 🟡 Partial | Zip-zone + skill matching and a dispatch SMS. **No route optimisation, no map UI.** |
@@ -129,7 +129,7 @@ Each row was confirmed in code, and where marked ✓runtime, exercised against a
 | Password reset by email, single-use, revokes all sessions | ✅ Built ✓tested (send path unexercised) |
 | Staff invitations — email link, single use, tenant-bound | ✅ Built ✓tested (send path unexercised) |
 | Media-stream WebSocket authorization (single-use signed token) | ✅ Built ✓tested |
-| Automated test suite — 568 tests over tenancy, money, auth, pricing, notifications and segments | ✅ Built, wired into CI |
+| Automated test suite — 628 tests over tenancy, money, auth, pricing, notifications and segments | ✅ Built, wired into CI |
 | Data retention sweep + per-customer data erasure | ✅ Built |
 | AI/recording disclosure spoken before the assistant answers | ✅ Built |
 | Docker, compose, CI (typecheck/build/secrets/image) | ✅ Built |
@@ -150,9 +150,11 @@ Each row was confirmed in code, and where marked ✓runtime, exercised against a
 | A2 | **Password reset flow** | ✅ Done | There was no recovery path at all — a forgotten password meant permanent lockout. | — |
 | A3 | **Commit the work** | ✅ Done | Committed in four logical commits on `feat/staff-accounts-rbac-and-tests` and pushed. Verified no `.env`, key material or temp file entered any commit. | — |
 | ~~A4~~ | ~~**Rotate the leaked credential**~~ | ❌ **Withdrawn — was never true** | See below. | — |
-| A5 | **Tests for the money and tenancy paths** | ✅ Done | The QA pass found a critical cross-tenant hole precisely because nothing guarded these. 568 tests now cover worker tenant + per-technician scoping, portal share tokens, Stripe and Twilio webhook signatures, RBAC, password reset, invitations, the media-stream token, pricing and job completion, scheduling and timezones, SMS consent, notification templates, equipment and property data, and segment campaigns. | — |
+| A5 | **Tests for the money and tenancy paths** | ✅ Done | The QA pass found a critical cross-tenant hole precisely because nothing guarded these. 628 tests now cover worker tenant + per-technician scoping, portal share tokens, Stripe and Twilio webhook signatures, RBAC, password reset, invitations, the media-stream token, pricing and job completion, scheduling and timezones, SMS consent, notification templates, equipment and property data, and segment campaigns. | — |
 
 **On defects found since.** Writing `partial.md` — a day-by-day plan to finish the nine partial features — required reading all nine at model, service, controller and page level. That read turned up **seven defects in shipped code**, all now fixed with tests and mutation checks. Four shared one root cause worth naming: code reading or writing a field that does not exist on the schema, which Mongoose silently tolerates in both directions. The worst of them meant a customer who texted STOP kept receiving messages. Details in `partial.md` §2.
+
+**On three defects found in this work by an independent audit.** A separate pass over the repo (`newbugs.md`) reported twelve bugs; three were in code from Days 14–19 and are fixed: a part logged in the field app billed at $0.00 (`unitPrice` posted where the schema has `unitCost` — the same schema-mismatch class as the $189 defect), the end-after-start check present on the reschedule schema but missing from create, and a named booking that ignored crew capacity so a two-person crew could hold three concurrent jobs. The last is the instructive one: it was a hole in a *fix*, and every test written alongside that fix passed, because all of them had the overlapping work already assigned — the case where checking one technician's diary is sufficient. The other nine findings are in modules this plan has not reached and are left open rather than half-addressed.
 
 Building the features then turned up **sixteen more**, which is the more useful number: the planning read found what was obviously wrong, and actually touching the code found what was quietly wrong. Seven came from the pricing work alone — a dashboard page posting a tax *percentage* into a field bounded at 1, so every estimate created from it was rejected; a field-app button inventing an hour of labour on every job it closed; an estimate tier carrying its own total but the previous tier's tax. None of these threw, none logged, and every one of them was a number on a customer's bill.
 
@@ -228,6 +230,8 @@ Worth knowing before a demo, because each one reads as finished in the UI.
 | **Customer equipment badge** | ~~Every customer row showed "Carrier 4T Split (410A)" or "Carrier 10T RTU", chosen from a property type that was itself never persisted.~~ **Removed.** No equipment is recorded anywhere in the product; that model is Day 10 in `partial.md`. |
 | **Technician logins** | ~~Technicians are records, not users.~~ **Fixed.** Technicians can now hold their own accounts, linked to a dispatch record, and the field app scopes to their own jobs. One gap remains: `frontend/app/worker/page.tsx` still has no client-side auth guard, so an unauthenticated visitor gets a page that renders and then fails its API calls. The data is safe — every `/api/worker/*` route is behind authentication — but the page should redirect rather than break. |
 | **Voice at scale** | `VoiceStreamHandler` and `VoiceSessionService` hold sessions in in-process `Map`s, so voice works on exactly one instance. The cron scheduler is now multi-replica safe; voice is not. |
+| **Recurrence in the booking form** | The API accepts a `recurrence` rule on create, the series endpoints work, and the scheduler tops up long plans — but the booking modal has no control for it, so a maintenance plan can currently only be created through the API. Backend complete, UI not. |
+| **Technician lanes on the calendar** | The day view lists jobs by hour rather than in per-technician columns. Deferred on purpose: lanes are worth having once jobs are routinely assigned, and assignment still has no picker in the booking flow. |
 | **Sales tax by jurisdiction** | One rate per business, entered by the owner. A contractor crossing a city or county line is charging the wrong rate, and nothing in the product knows it. Deliberately not solved alongside the pricing engine: a ZIP is not a tax jurisdiction, so deriving a rate from one would replace a number the owner chose with a number the product guessed. Needs a real rate source. |
 
 ---
@@ -256,7 +260,8 @@ Worth knowing before a demo, because each one reads as finished in the UI.
 | SMS consent | Automated — STOP persists and blocks sending, START restores, no duplicate booking from a consent reply |
 | Pricing rules | Automated — a table of inputs to exact expected totals, the order of operations distinguished from its plausible alternatives, prices chosen for their floating-point representation error, per-zone travel fees and discounts, and cross-tenant reads of the appointment priority and the customer ZIP refused |
 | Scheduling and timezones | Automated — wall-clock-to-instant conversion across both DST transitions and a zone that has none, the invariant that every offered slot passes the booking path's own opening-hours check, per-technician conflicts, crew capacity for unassigned jobs, five parallel bookings for one technician yielding one job, two tenants booking the same instant, both boundaries of the calendar range, and the reschedule route's own validation including a `null` start time that would otherwise have booked the epoch |
-| **Automated tests** | ✅ 568 tests, 22 files, in CI. Mutation-checked: **330 deliberate regressions attempted, 327 caught** (27 on staff accounts/RBAC, 24 on Days 2–5, 90 on Days 6–13, 24 on email consent, 68 on pricing, 97 on scheduling and the calendar — per-group breakdown in `partial.md`). Two survivors, both verified behaviour-neutral and documented in place: a redundant tenant clause whose load-bearing twin *was* caught, and a total rounded in dollars rather than derived in cents, which is equivalent only because of an argument about floating-point ulps that the code explains and declines to depend on. Separately, **five** pieces of code were found to be unreachable or observationally identical to a simpler form, and were deleted rather than left implying checks that could never fire |
+| Recurring appointments | Automated — a weekly series holding its local time across a DST transition, a monthly one skipping the months that lack its date, 29 February in and out of leap years, generation idempotent on a watermark, a clashing visit skipped and reported rather than double-booked, the top-up job's cost guards asserted on candidates examined rather than rows created, and ending a series distinguished from cancelling one visit |
+| **Automated tests** | ✅ 628 tests, 23 files, in CI. Mutation-checked: **393 deliberate regressions attempted, 390 caught** (27 on staff accounts/RBAC, 24 on Days 2–5, 90 on Days 6–13, 24 on email consent, 68 on pricing, 160 on scheduling, the calendar and recurrence — per-group breakdown in `partial.md`). Two survivors, both verified behaviour-neutral and documented in place: a redundant tenant clause whose load-bearing twin *was* caught, and a total rounded in dollars rather than derived in cents, which is equivalent only because of an argument about floating-point ulps that the code explains and declines to depend on. Separately, **five** pieces of code were found to be unreachable or observationally identical to a simpler form, and were deleted rather than left implying checks that could never fire |
 | **Voice pipeline end to end** | ❌ Never — no provider keys |
 | **Email delivery** | ❌ Never — no `EMAIL_API_KEY`. Reset and invite flows are tested with the sender stubbed, so the token lifecycle is proven and the Resend call is not |
 | **Live card payment** | ❌ Never — Stripe in simulation mode |

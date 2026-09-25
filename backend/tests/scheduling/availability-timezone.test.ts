@@ -1665,3 +1665,213 @@ describe('the reschedule route validates its body', () => {
     expect(untouched!.status).toBe('scheduled');
   });
 });
+
+describe('capacity is respected even when a technician is named', () => {
+  /**
+   * A hole found by an independent audit of this session's own work, and a fair catch.
+   *
+   * The first version of `checkSlotConflictDetailed` asked only "is this person free?" when
+   * a technician was named. With a crew of two and two *unassigned* jobs already
+   * overlapping, neither is attached to Technician A, so A looks free — and accepting the
+   * booking gives a two-person crew three concurrent jobs. Naming someone narrows who can
+   * do the work; it does not conjure a third technician.
+   */
+  const seed = async () => {
+    const shop = await createWorkspace();
+    const [service, customer] = await Promise.all([
+      createServiceRecord(shop.businessId),
+      createCustomerRecord(shop.businessId),
+    ]);
+    const startAt = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000);
+    startAt.setUTCHours(12, 0, 0, 0);
+    const endAt = new Date(startAt.getTime() + 60 * 60 * 1000);
+    return { shop, service, customer, startAt, endAt };
+  };
+
+  const book = (
+    ctx: Awaited<ReturnType<typeof seed>>,
+    technicianId: any,
+    technicianName?: string
+  ) =>
+    Appointment.create({
+      businessId: ctx.shop.businessId,
+      customerId: ctx.customer._id,
+      serviceId: ctx.service._id,
+      technicianId,
+      technicianName,
+      startAt: ctx.startAt,
+      endAt: ctx.endAt,
+      status: 'scheduled',
+      timezone: 'UTC',
+      address: '1 Test St',
+    });
+
+  it('refuses a named booking when unassigned work has already used the crew up', async () => {
+    const ctx = await seed();
+    const [alpha] = await Promise.all([
+      createTechnicianRecord(ctx.shop.businessId, 'Alpha'),
+      createTechnicianRecord(ctx.shop.businessId, 'Beta'),
+    ]);
+
+    await book(ctx, null);
+    await book(ctx, null);
+
+    const conflict = await AvailabilityService.checkSlotConflictDetailed(
+      ctx.shop.businessId,
+      ctx.startAt,
+      ctx.endAt,
+      { technicianId: alpha._id }
+    );
+
+    expect(conflict.conflict).toBe(true);
+    expect(conflict.reason).toMatch(/All 2 technicians/);
+  });
+
+  it('allows a named booking while the crew still has room', async () => {
+    // The check must not become "nobody may ever be named", which would undo the crew fix.
+    const ctx = await seed();
+    const [alpha] = await Promise.all([
+      createTechnicianRecord(ctx.shop.businessId, 'Alpha'),
+      createTechnicianRecord(ctx.shop.businessId, 'Beta'),
+    ]);
+
+    await book(ctx, null);
+
+    const conflict = await AvailabilityService.checkSlotConflictDetailed(
+      ctx.shop.businessId,
+      ctx.startAt,
+      ctx.endAt,
+      { technicianId: alpha._id }
+    );
+
+    expect(conflict.conflict).toBe(false);
+  });
+
+  it('still names the technician when it is their own diary that clashes', async () => {
+    // The person-specific message has to survive the extra capacity check: "Alpha is
+    // already booked" is more useful than "all 2 technicians are".
+    const ctx = await seed();
+    const [alpha] = await Promise.all([
+      createTechnicianRecord(ctx.shop.businessId, 'Alpha Smith'),
+      createTechnicianRecord(ctx.shop.businessId, 'Beta'),
+    ]);
+
+    await book(ctx, alpha._id, 'Alpha Smith');
+
+    const conflict = await AvailabilityService.checkSlotConflictDetailed(
+      ctx.shop.businessId,
+      ctx.startAt,
+      ctx.endAt,
+      { technicianId: alpha._id }
+    );
+
+    expect(conflict.conflict).toBe(true);
+    expect(conflict.reason).toMatch(/Alpha Smith/);
+  });
+
+  it('refuses the third named booking for a two-person crew', async () => {
+    const ctx = await seed();
+    const [alpha, beta, gamma] = await Promise.all([
+      createTechnicianRecord(ctx.shop.businessId, 'Alpha'),
+      createTechnicianRecord(ctx.shop.businessId, 'Beta'),
+      // A third technician record that is inactive, so capacity is still two.
+      createTechnicianRecord(ctx.shop.businessId, 'Gamma'),
+    ]);
+    gamma.active = false;
+    await gamma.save();
+
+    await book(ctx, alpha._id, 'Alpha');
+    await book(ctx, beta._id, 'Beta');
+
+    const conflict = await AvailabilityService.checkSlotConflictDetailed(
+      ctx.shop.businessId,
+      ctx.startAt,
+      ctx.endAt,
+      { technicianId: gamma._id }
+    );
+
+    expect(conflict.conflict).toBe(true);
+  });
+});
+
+describe('an appointment cannot be created with its times inverted', () => {
+  /**
+   * The chronology check existed on the reschedule schema and not on create, which is the
+   * worse way round: create is the path the AI, the dashboard and the portal all use.
+   *
+   * An inverted window saves cleanly, because the overlap predicate
+   * `startAt < endAt AND endAt > startAt` matches nothing when the two are the wrong way
+   * round — so the appointment is invisible to every conflict check forever, and carries a
+   * negative duration that every later reschedule inherits.
+   */
+  const bookableInstant = () => {
+    const d = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000);
+    d.setUTCHours(12, 0, 0, 0);
+    return d;
+  };
+
+  it('refuses an endAt before the startAt', async () => {
+    const shop = await createWorkspace();
+    const [service, customer] = await Promise.all([
+      createServiceRecord(shop.businessId),
+      createCustomerRecord(shop.businessId),
+    ]);
+
+    const startAt = bookableInstant();
+
+    const res = await asUser(shop.ownerToken)
+      .post('/api/appointments')
+      .send({
+        customerId: customer._id.toString(),
+        serviceId: service._id.toString(),
+        startAt: startAt.toISOString(),
+        endAt: new Date(startAt.getTime() - 60 * 60 * 1000).toISOString(),
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.fields?.endAt).toMatch(/after the start time/i);
+    expect(await Appointment.countDocuments({ businessId: shop.businessId })).toBe(0);
+  });
+
+  it('refuses an endAt equal to the startAt', async () => {
+    const shop = await createWorkspace();
+    const [service, customer] = await Promise.all([
+      createServiceRecord(shop.businessId),
+      createCustomerRecord(shop.businessId),
+    ]);
+
+    const startAt = bookableInstant();
+
+    const res = await asUser(shop.ownerToken)
+      .post('/api/appointments')
+      .send({
+        customerId: customer._id.toString(),
+        serviceId: service._id.toString(),
+        startAt: startAt.toISOString(),
+        endAt: startAt.toISOString(),
+      });
+
+    expect(res.status).toBe(400);
+  });
+
+  it('still accepts a normal window', async () => {
+    const shop = await createWorkspace();
+    const [service, customer] = await Promise.all([
+      createServiceRecord(shop.businessId),
+      createCustomerRecord(shop.businessId),
+    ]);
+
+    const startAt = bookableInstant();
+
+    const res = await asUser(shop.ownerToken)
+      .post('/api/appointments')
+      .send({
+        customerId: customer._id.toString(),
+        serviceId: service._id.toString(),
+        startAt: startAt.toISOString(),
+        endAt: new Date(startAt.getTime() + 90 * 60 * 1000).toISOString(),
+      });
+
+    expect(res.status).toBe(201);
+  });
+});

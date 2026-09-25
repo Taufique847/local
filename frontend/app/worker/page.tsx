@@ -212,11 +212,26 @@ export default function WorkerPWAPage() {
     if (!activeJob || !newPartName || !newPartCost) return;
     triggerHaptic(40);
 
+    /**
+     * `unitCost`, which is the field that exists.
+     *
+     * This posted `unitPrice`. `Appointment.partsUsed` carries `partName`, `quantity`,
+     * `unitCost` and `totalCost` — Mongoose silently discards a key the subdocument schema
+     * does not have, so `unitCost` fell to its default of 0 and every part a technician
+     * logged from the field was billed at **$0.00**. The list below reads `p.unitCost` and
+     * was rendering `$undefined/unit`, which was the only visible symptom.
+     *
+     * The same class of defect as the `svc.price` / `startingPrice` mismatch that made
+     * every field invoice $189: writing a field that is not on the schema, which Mongoose
+     * tolerates in both directions.
+     *
+     * `partNumber` is dropped for the same reason — it is not on the schema either, so it
+     * was never stored and nothing ever read it back.
+     */
     const newPart = {
       partName: newPartName,
-      partNumber: `BC-PRT-${Math.floor(1000 + Math.random() * 9000)}`,
       quantity: Number(newPartQty),
-      unitPrice: Number(newPartCost),
+      unitCost: Number(newPartCost),
     };
 
     const updatedParts = [...(activeJob.partsUsed || []), newPart];

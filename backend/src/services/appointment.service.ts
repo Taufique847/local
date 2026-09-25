@@ -135,6 +135,25 @@ export class AppointmentService {
       { bypassQuietHours: true }
     );
 
+    /**
+     * The rest of a repeating series is generated after the lock is released, and its
+     * failure cannot fail the booking.
+     *
+     * `materialise` takes the same per-business lock, so it has to run outside this one.
+     * And the first visit is the commitment: if generating visits 2–12 fails, the customer
+     * still has the appointment they just made and the top-up job will fill in the rest on
+     * its next tick. Throwing here would lose a confirmed booking to a problem with a
+     * later date.
+     */
+    if (appointment.recurrenceRule) {
+      try {
+        const { RecurrenceService } = await import('./recurrence.service');
+        await RecurrenceService.materialise(businessId, appointment._id);
+      } catch (err: any) {
+        console.warn('Could not generate the rest of the series:', err?.message);
+      }
+    }
+
     return appointment;
   }
 
@@ -252,6 +271,14 @@ export class AppointmentService {
       technicianName: assignment?.technicianName ?? input.technicianName,
       customerNotes: input.customerNotes,
       internalNotes: input.internalNotes,
+      /**
+       * The rule is validated here and the occurrences are generated after the lock is
+       * released. Validating first means a malformed plan is a 400 before anything is
+       * written, rather than one appointment plus an error.
+       */
+      recurrenceRule: input.recurrence
+        ? (await import('./recurrence.service')).RecurrenceService.normaliseRule(input.recurrence)
+        : null,
       createdBy,
     });
 
