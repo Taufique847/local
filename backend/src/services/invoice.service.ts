@@ -2,6 +2,9 @@ import { Types } from 'mongoose';
 import { Invoice, IInvoice, IInvoiceItem, PaymentMethod } from '../models/invoice.model';
 import { Customer } from '../models/customer.model';
 import { DocumentNumberService } from './document-number.service';
+import { PolicyGuardrailsService } from './policy-guardrails.service';
+import { NotificationService } from './notification.service';
+import { PricingService, PricingDiscount } from './pricing.service';
 import { AppError } from '../types';
 import { generateShareToken, isValidShareTokenFormat } from '../utils/share-token';
 
@@ -16,6 +19,12 @@ export class InvoiceService {
       items: IInvoiceItem[];
       diagnosticFeeCredit?: number;
       taxRate?: number;
+      /** Overrides the appointment's priority. Lets an owner charge or waive it. */
+      emergency?: boolean;
+      emergencyFee?: number;
+      /** Overrides the zone lookup. */
+      travelFee?: number;
+      discount?: PricingDiscount;
       dueDate?: Date;
       notes?: string;
     }
@@ -28,13 +37,34 @@ export class InvoiceService {
     const invoiceNumber = await DocumentNumberService.next(businessId, 'invoice');
     const shareToken = generateShareToken('inv');
 
-    // Calculations
-    const subtotal = data.items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
-    const diagCredit = data.diagnosticFeeCredit ?? 0;
-    const taxableSubtotal = Math.max(0, subtotal - diagCredit);
-    const taxRate = data.taxRate ?? 0.0825;
-    const taxAmount = parseFloat((taxableSubtotal * taxRate).toFixed(2));
-    const totalAmount = parseFloat((taxableSubtotal + taxAmount).toFixed(2));
+    /**
+     * All arithmetic lives in `PricingService`.
+     *
+     * This method, `EstimateService.createEstimate` and `WorkerService.completeJob`
+     * each held their own copy of it, and they had already drifted apart — the field
+     * app's copy hardcoded 8.25% tax, and none of the three billed the emergency fee.
+     */
+    const policy = await PolicyGuardrailsService.getPolicy(businessId);
+
+    const { emergency, travelFee } = await PricingService.resolveJobContext(businessId, {
+      appointmentId: data.appointmentId || null,
+      zip: (customer as any).address?.zip ?? null,
+      emergency: data.emergency,
+      travelFee: data.travelFee,
+    });
+
+    const quote = PricingService.quote(
+      {
+        items: data.items,
+        diagnosticFeeCredit: data.diagnosticFeeCredit,
+        taxRate: data.taxRate,
+        emergency,
+        emergencyFee: data.emergencyFee,
+        travelFee,
+        discount: data.discount,
+      },
+      policy
+    );
 
     const invoice = await Invoice.create({
       businessId,
@@ -43,24 +73,35 @@ export class InvoiceService {
       estimateId: data.estimateId || null,
       invoiceNumber,
       title: data.title || 'HVAC Service & Repair Invoice',
-      items: data.items.map((i) => ({
-        description: i.description,
-        quantity: i.quantity,
-        unitPrice: i.unitPrice,
-        total: parseFloat((i.quantity * i.unitPrice).toFixed(2)),
-      })),
-      subtotal,
-      diagnosticFeeCredit: diagCredit,
-      taxRate,
-      taxAmount,
-      totalAmount,
+      items: quote.items,
+      subtotal: quote.subtotal,
+      diagnosticFeeCredit: quote.diagnosticFeeCredit,
+      emergencyFee: quote.emergencyFee,
+      travelFee: quote.travelFee,
+      discountType: quote.discountType,
+      discountValue: quote.discountValue,
+      discountAmount: quote.discountAmount,
+      discountReason: quote.discountReason,
+      taxRate: quote.taxRate,
+      taxAmount: quote.taxAmount,
+      totalAmount: quote.totalAmount,
       amountPaid: 0,
-      balanceDue: totalAmount,
+      balanceDue: quote.totalAmount,
       status: 'unpaid',
       dueDate: data.dueDate || new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
       notes: data.notes,
       shareToken,
     });
+
+    /**
+     * The customer is told, which until now they were not.
+     *
+     * An invoice was created with `status: 'unpaid'` and a `shareToken` that only
+     * ever appeared in the owner's own dashboard, so the payment portal was
+     * unreachable by the one person meant to use it. There is no draft state and
+     * no separate "send" action on this model, so creation is issuance.
+     */
+    await NotificationService.notifyInvoice(invoice, 'invoice_issued');
 
     return invoice;
   }
@@ -225,6 +266,41 @@ export class InvoiceService {
     invoice.paidAt = new Date();
 
     await invoice.save();
+
+    /**
+     * Lifetime value, which nothing used to write.
+     *
+     * The field has existed on `Customer` since the beginning and no code path ever
+     * set it, so it was permanently `0` and `customer-360.service.ts` computed a
+     * fallback on read because the stored value could not be trusted. Hooked here
+     * because this is the single function the portal card path, the dashboard manual
+     * entry and the Stripe webhook all funnel through.
+     *
+     * Payments received, not invoices raised — an unpaid invoice is not lifetime
+     * value — and incremented by `payAmount` so a partial payment counts for what was
+     * actually taken.
+     *
+     * `$inc`, not read-modify-write: two payments settling concurrently would
+     * otherwise lose one of them.
+     */
+    await Customer.updateOne(
+      { _id: invoice.customerId, businessId: invoice.businessId },
+      { $inc: { lifetimeValue: payAmount } }
+    ).catch((err: any) => console.warn('Could not update customer lifetimeValue:', err?.message));
+
+    /**
+     * Receipt sent from here, not from the three callers.
+     *
+     * `applyPayment` is the only place money state moves — the portal card path,
+     * the dashboard manual entry and the Stripe webhook all funnel through it — so
+     * hooking it once means no payment route can be added later that silently
+     * forgets to send a receipt.
+     *
+     * `payAmount`, not the invoice total: a partial payment gets a receipt for
+     * what was actually taken.
+     */
+    await NotificationService.notifyInvoice(invoice, 'payment_receipt', payAmount);
+
     return invoice;
   }
 

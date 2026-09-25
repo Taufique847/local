@@ -20,6 +20,35 @@ export interface IBusinessPolicy extends Document {
   diagnosticFee: number;
   emergencyFee: number;
   /**
+   * Sales tax applied to invoices and estimates, as a fraction (0.0825 = 8.25%).
+   *
+   * Lives here because it was previously a literal in three separate files, and
+   * in the technician's job-completion path it was not overridable at all — so a
+   * business outside that one tax jurisdiction was silently billed the wrong
+   * amount with no way to correct it.
+   *
+   * Still a single blended rate. Per-jurisdiction tax is a real feature and is
+   * not this field.
+   */
+  taxRate: number;
+  /**
+   * Default hourly labour rate for additional time a technician logs on site.
+   *
+   * Was hardcoded to 95 in the job-completion path.
+   */
+  laborRate: number;
+  /**
+   * How long before an appointment the reminder goes out, in hours.
+   *
+   * Per business because the right lead time is a function of the trade: a
+   * maintenance visit booked three weeks out wants a day's notice, an emergency
+   * call booked this morning wants two hours. The old reminder copy hardcoded
+   * "tomorrow" — and nothing ever sent it, so the wording was never noticed.
+   */
+  reminderLeadHours: number;
+  /** Set false to stop sending appointment reminders for this business at all. */
+  appointmentRemindersEnabled: boolean;
+  /**
    * Whether callers hear a spoken notice that they are talking to an automated
    * assistant and that the conversation is captured, before the AI session
    * begins.
@@ -105,6 +134,37 @@ const businessPolicySchema = new Schema<IBusinessPolicy>(
       default: 149,
       min: 0,
       max: 10000,
+    },
+    taxRate: {
+      type: Number,
+      // 8.25% — the literal that was previously hardcoded. Kept as the default
+      // so existing businesses are billed exactly as before until they change it.
+      default: 0.0825,
+      min: 0,
+      // A fraction, not a percentage. 1 would be 100% tax; anything above that
+      // is a data-entry error, not a jurisdiction.
+      max: 1,
+    },
+    laborRate: {
+      type: Number,
+      default: 95,
+      min: 0,
+      max: 10000,
+    },
+    reminderLeadHours: {
+      type: Number,
+      default: 24,
+      // At least an hour: a reminder that arrives as the van pulls up is noise.
+      min: 1,
+      // A week. This is also the ceiling the reminder job uses to size its
+      // candidate query window, so raising it widens that scan — see
+      // MAX_REMINDER_LEAD_HOURS in appointment-reminder.service.ts, which must be
+      // kept in step with this number.
+      max: 168,
+    },
+    appointmentRemindersEnabled: {
+      type: Boolean,
+      default: true,
     },
     aiDisclosureEnabled: {
       type: Boolean,

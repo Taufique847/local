@@ -59,6 +59,12 @@ export interface Business {
   services: ServiceItem[];
   serviceArea: ServiceArea;
   businessHours: DayHours[];
+  /**
+   * IANA zone, e.g. `America/Chicago`. Stored on the business since the beginning and
+   * missing from this type, which is part of why the dispatch calendar rendered its
+   * hours in UTC: the one field that could have told it otherwise was not visible here.
+   */
+  timezone?: string;
   emergencyService: EmergencyService;
   /**
    * Full Google "write a review" URL including the real Place ID. Only sent to

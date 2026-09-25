@@ -4,7 +4,12 @@ import { Customer360Controller } from '../controllers/customer-360.controller';
 import { AgentMemoryController } from '../controllers/agent-memory.controller';
 import { authMiddleware } from '../middleware/auth.middleware';
 import { validateBody } from '../middleware/validate';
-import { createCustomerSchema, updateCustomerSchema } from '../validation/schemas';
+import { EquipmentController } from '../controllers/equipment.controller';
+import {
+  createCustomerSchema,
+  updateCustomerSchema,
+  createEquipmentSchema,
+} from '../validation/schemas';
 
 const router = Router();
 
@@ -24,6 +29,30 @@ router.put('/:id/tags', Customer360Controller.updateTags as any);
  * amounts and dates remain. Irreversible.
  */
 router.post('/:id/erase', CustomerController.erasePersonalData as any);
+
+/**
+ * Re-subscribes a customer to marketing email.
+ *
+ * Staff-only, and deliberately not reachable from a link. A customer who wants email
+ * again asks the business; putting a re-subscribe link in an email would let the
+ * unsubscribe page undo itself, and a prefetching mail scanner hitting it would opt
+ * somebody back in without anybody clicking.
+ */
+router.post('/:id/resubscribe-email', CustomerController.resubscribeEmail as any);
+
+/**
+ * Equipment on the customer's property.
+ *
+ * Nested for reads and creates because a unit only exists in the context of one
+ * customer. Updates live on a flat `/api/equipment/:id` so a client editing a row it
+ * already holds does not have to carry the customer id.
+ */
+router.get('/:customerId/equipment', EquipmentController.list as any);
+router.post(
+  '/:customerId/equipment',
+  validateBody(createEquipmentSchema),
+  EquipmentController.create as any
+);
 
 // M19 Agent Memory routes
 router.get('/:customerId/memories', AgentMemoryController.getMemories as any);

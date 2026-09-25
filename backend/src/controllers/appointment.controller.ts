@@ -1,5 +1,6 @@
 import { Response, NextFunction } from 'express';
 import { AppointmentService } from '../services/appointment.service';
+import { RecurrenceService } from '../services/recurrence.service';
 import { BusinessContextService } from '../services/business-context.service';
 import { AuthenticatedRequest } from '../types/auth.types';
 import { sendSuccess } from '../utils/response';
@@ -145,11 +146,13 @@ export class AppointmentController {
     try {
       if (!req.user) throw new AppError('Authentication required', 401);
       const businessId = await AppointmentController.getBusinessId(req.user.id);
+      /**
+       * No manual `if (!startAt)` here. `rescheduleAppointmentSchema` requires it and
+       * reports it against the field, which a form can highlight; the hand-rolled check
+       * produced a sentence with nothing to attach it to, and two guards for one
+       * condition meant neither could be tested independently of the other.
+       */
       const { startAt, endAt, reason } = req.body;
-
-      if (!startAt) {
-        throw new AppError('New start time (startAt) is required to reschedule', 400);
-      }
 
       const appointment = await AppointmentService.rescheduleAppointment(businessId, req.params.id, {
         startAt,
@@ -182,6 +185,58 @@ export class AppointmentController {
       );
 
       sendSuccess(res, { success: true, message: 'Appointment cancelled successfully', appointment }, 200);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  // GET /api/appointments/:id/series
+  public static async getSeries(
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      if (!req.user) throw new AppError('Authentication required', 401);
+      const businessId = await AppointmentController.getBusinessId(req.user.id);
+      const appointments = await RecurrenceService.listSeries(businessId, req.params.id);
+      sendSuccess(res, { success: true, appointments }, 200);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * POST /api/appointments/:id/cancel-series
+   *
+   * Separate from `/cancel`, which is deliberately the single-occurrence action. Ending a
+   * plan and skipping one visit are different intentions and a dispatcher must not be able
+   * to do the first while meaning the second.
+   */
+  public static async cancelSeries(
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      if (!req.user) throw new AppError('Authentication required', 401);
+      const businessId = await AppointmentController.getBusinessId(req.user.id);
+      const { from, reason } = req.body;
+
+      const result = await RecurrenceService.cancelSeries(businessId, req.params.id, {
+        from,
+        reason,
+      });
+
+      sendSuccess(
+        res,
+        {
+          success: true,
+          message: `${result.cancelled} upcoming visit${result.cancelled === 1 ? '' : 's'} cancelled`,
+          ...result,
+        },
+        200
+      );
     } catch (error) {
       next(error);
     }

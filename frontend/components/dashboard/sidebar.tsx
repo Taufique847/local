@@ -22,10 +22,15 @@ import {
   Star,
   MessageSquare,
   PhoneForwarded,
+  Inbox,
+  Bell,
+  UserCog,
 } from 'lucide-react';
 import { Business } from '@/types/business';
 import { SubscriptionData } from '@/services/billing.service';
 import { useDialog } from '@/lib/use-dialog';
+import { useAuth } from '@/context/auth-context';
+import { isOwner } from '@/types/auth';
 
 interface SidebarProps {
   business?: Business | null;
@@ -75,6 +80,14 @@ interface NavItem {
   exact?: boolean;
   badge?: string;
   badgeColor?: string;
+  /**
+   * Hidden from anyone who is not the workspace owner.
+   *
+   * The backend already refuses these routes with a 403; without this a dispatcher
+   * sees a link that exists only to fail. Belt and braces: this hides it, the server
+   * is what enforces it.
+   */
+  ownerOnly?: boolean;
 }
 
 interface NavGroup {
@@ -89,6 +102,8 @@ export function Sidebar({
   onCloseMobile,
 }: SidebarProps) {
   const pathname = usePathname();
+  const { user } = useAuth();
+  const viewerIsOwner = isOwner(user);
 
   const drawerRef = useDialog<HTMLDivElement>({
     isOpen: mobileOpen,
@@ -123,6 +138,9 @@ export function Sidebar({
         { name: 'Appointments', href: '/app/appointments', icon: Calendar },
         { name: 'Leads', href: '/app/leads', icon: UserPlus },
         { name: 'Customers', href: '/app/customers', icon: Users },
+        // Reschedule requests and inbound messages nothing automated could answer.
+        // Both used to be invisible, which is the whole reason this entry exists.
+        { name: 'Action Queue', href: '/app/action-queue', icon: Inbox },
         { name: 'Field Worker App', href: '/worker', icon: Smartphone },
       ],
     },
@@ -147,11 +165,34 @@ export function Sidebar({
       items: [
         { name: 'Phone Line', href: '/app/settings/phone', icon: PhoneForwarded },
         { name: 'AI Knowledge & Rules', href: '/app/settings', icon: BookOpen },
+        // Owner-only: this changes what every customer of the business receives, and
+        // the standard wording carries the opt-out notice carriers expect.
+        {
+          name: 'Customer Notifications',
+          href: '/app/settings/notifications',
+          icon: Bell,
+          ownerOnly: true,
+        },
+        { name: 'Team', href: '/app/settings/team', icon: UserCog, ownerOnly: true },
         { name: 'Services & Pricing', href: '/app/services', icon: Wrench },
         { name: 'Business Profile', href: '/onboarding', icon: Building2 },
       ],
     },
   ];
+
+  /**
+   * Owner-only entries are removed for everyone else, and a group that empties out
+   * disappears with them rather than leaving a heading over nothing.
+   *
+   * Presentation only. The server refuses these routes with a 403 regardless; this
+   * stops a dispatcher being shown a link whose only outcome is an error.
+   */
+  const visibleGroups = navGroups
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((item) => !item.ownerOnly || viewerIsOwner),
+    }))
+    .filter((group) => group.items.length > 0);
 
   const sidebarContent = (
     <div className="flex flex-col h-full bg-white border-r border-slate-200/90 w-64 select-none">
@@ -189,7 +230,7 @@ export function Sidebar({
 
       {/* Navigation Links */}
       <div className="flex-1 overflow-y-auto py-4 px-3 space-y-6">
-        {navGroups.map((group) => (
+        {visibleGroups.map((group) => (
           <div key={group.title} className="space-y-1">
             <h3 className="px-3 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
               {group.title}

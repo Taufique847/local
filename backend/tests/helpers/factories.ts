@@ -23,7 +23,25 @@ interface WorkspaceOptions {
   name?: string;
   ownerEmail?: string;
   phone?: string;
+  /** Overrides the UTC default. Set this only when the test is about timezones. */
+  timezone?: string;
 }
+
+/**
+ * A bookable instant that does not depend on what time the suite runs.
+ *
+ * `Date.now() + N hours` looks harmless and is not: booking enforces a minimum notice
+ * period, a maximum horizon, and opening hours, so an offset from "now" drifts in and out
+ * of validity across the day. A 48-hour offset passed at 13:00 UTC and failed at 03:21,
+ * because the job then landed at 23:21 local and its 90 minutes crossed midnight.
+ *
+ * Returns midday, which is clear of every one of those edges.
+ */
+export const bookableAt = (daysAhead = 2): Date => {
+  const d = new Date(Date.now() + daysAhead * 24 * 60 * 60 * 1000);
+  d.setUTCHours(12, 0, 0, 0);
+  return d;
+};
 
 export interface Workspace {
   business: any;
@@ -84,6 +102,37 @@ export const createWorkspace = async (options: WorkspaceOptions = {}): Promise<W
     phone: options.phone ?? '+15551110000',
     onboardingStatus: 'completed',
     onboardingStep: 'completed',
+    /**
+     * UTC, unless a test says otherwise.
+     *
+     * `AvailabilityService.getAvailableSlots` buckets its slots in **UTC** while
+     * `isWithinBusinessHours` compares in the **business timezone** — a real
+     * inconsistency, and the one Day 16 exists to fix. Until then a fixture in any other
+     * zone can be offered a slot that the booking path then rejects, which shows up as a
+     * confusing 409 in a test about something else entirely.
+     *
+     * Pinning fixtures to UTC makes the two agree. The tests that actually cover
+     * timezone behaviour set a real zone explicitly, and they are what would catch the
+     * Day 16 fix going wrong.
+     */
+    timezone: options.timezone ?? 'UTC',
+    /**
+     * Open around the clock, every day, unless a test says otherwise.
+     *
+     * `Business.businessHours` defaults to real trading hours, and booking now enforces
+     * them, so without this every fixture booking at an arbitrary instant would be
+     * rejected for being outside opening hours — and the failure would look like a bug in
+     * whatever the test was actually about.
+     */
+    businessHours: [
+      'Sunday',
+      'Monday',
+      'Tuesday',
+      'Wednesday',
+      'Thursday',
+      'Friday',
+      'Saturday',
+    ].map((day) => ({ day, isOpen: true, openTime: '00:00', closeTime: '23:59' })),
   });
 
   owner.businessId = business._id;

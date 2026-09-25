@@ -9,13 +9,29 @@
 > | Area in this doc | Actual status |
 > |---|---|
 > | 1. Missed call & lead recovery | **Shipped.** 3-step drip, TCPA quiet hours, STOP/START, conversational SMS booking. Driven by a real cron scheduler (`backend/src/jobs/scheduler.ts`) — previously nothing invoked the drip processor, so steps 2 and 3 never fired. UI at `/app/recovery`. |
-> | 2. Realtime voice engine | **Shipped, but not yet verified against live provider credentials.** Deepgram Nova-2 STT → OpenAI tool-calling → Deepgram Aura TTS over Twilio Media Streams, with μ-law barge-in. **Cartesia is NOT used** — the table below naming it is wrong. Latency figures below are targets, not measurements; real per-call latency is now recorded in `CallLog.metrics`. |
-> | 3. Smart dispatch & zones | **Partially shipped.** Service zones (CRUD in settings), technician skills, ZIP matching, dispatch SMS. Route optimisation and map view are not built. |
+> | 2. Realtime voice engine | **Shipped, but still not verified against a live call.** Deepgram Nova-2 STT → tool-calling LLM → Deepgram Aura TTS over Twilio Media Streams, with μ-law barge-in. The LLM is **Azure OpenAI or public OpenAI, interchangeable via `LLM_PRIMARY`/`LLM_FALLBACK`** with failover bounded by a wall-clock budget — not OpenAI-only as written below. **Cartesia is NOT used** — the table below naming it is wrong. Latency figures below are targets, not measurements; real per-call latency is recorded in `CallLog.metrics`. The media-stream WebSocket is now authorised by a single-use signed token, because Twilio does not sign WS upgrades and this endpoint previously had no auth at all. |
+> | 3. Smart dispatch & zones | **Partially shipped, and the honest part is better than it was.** Service zones, technician skills, ZIP matching and the dispatch SMS all work. `Appointment.technicianId` is now actually written and scoped on — previously nothing wrote it, so every job carried `null` and the field app's per-technician scoping silently matched everything. The dispatch text now reads structured gate-code and equipment fields instead of guessing from free-text memory rows, and it refuses to send rather than falling back to texting the **customer** their own gate code. Route optimisation, geocoding and the map view are still not built; a fabricated route map with invented savings figures was removed from the appointments page. |
 > | 4. Review & reputation shielding | **Shipped.** Delayed CSAT survey, 4–5★ → Google, 1–3★ shielded + escalated, 24h SLA sweep with owner alert. UI at `/app/reviews`. The Google link must be configured per business — a link built from the business name is not valid. |
-> | 5. Frontend dashboards | **Mostly shipped.** Customer 360 drawer, knowledge base + guardrail editors, dispatch zones, reviews, messages, recovery. A dedicated conversation-QA hub page was not built; QA data surfaces inside `/app/calls`. |
+> | 5. Frontend dashboards | **Mostly shipped.** Customer 360 drawer (now with an Equipment & Access tab), knowledge base + guardrail editors, dispatch zones, reviews, messages, recovery, plus an Action Queue for reschedule requests and unanswered inbound texts, an owner-only Customer Notifications editor, and saved segments with campaigns. A dedicated conversation-QA hub page was not built; QA data surfaces inside `/app/calls`. |
+>
+> **Shipped since this doc was written, and not in it at all** — these turned out to
+> matter more than anything left on its list, because each was a feature that existed
+> in the database and reached no customer:
+>
+> - **Customer-facing email as a real channel.** Booking confirmation, reschedule,
+>   cancellation, appointment reminder, quote sent, invoice issued and payment receipt
+>   had **no sender between them**. An invoice was created with a `shareToken` that only
+>   ever appeared on the owner's own screen, so the payment portal was unreachable by
+>   the one person it was for.
+> - **Appointment reminders.** The template and the message type both existed with zero
+>   callers.
+> - **Confirm/reschedule by customer reply**, and an Action Queue so an inbound text
+>   nothing understood is no longer logged and dropped in silence.
+> - **Per-business message templates** and **customer segments with campaigns.**
 >
 > Also note: the phased plan at the bottom is historical. Do not treat its
-> estimates or ordering as current.
+> estimates or ordering as current. For the live picture see `FINAL.md`; for what is
+> still outstanding and in what order, `partial.md`.
 
 # 🚀 Advanced Automations & Enterprise Scaling Roadmap (M21 - M25)
 ## BlueCollar AI — US HVAC Autonomous Employee Platform

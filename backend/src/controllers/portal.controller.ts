@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { EstimateService } from '../services/estimate.service';
 import { InvoiceService } from '../services/invoice.service';
 import { BillingService } from '../services/billing.service';
+import { EmailConsentService } from '../services/email-consent.service';
 
 /**
  * Public (unauthenticated) customer-portal endpoints.
@@ -11,6 +12,45 @@ import { BillingService } from '../services/billing.service';
  * format and look documents up by shareToken alone — never by Mongo `_id`.
  */
 export class PortalController {
+  /**
+   * GET /api/portal/unsubscribe/:token — describes, does not act.
+   *
+   * Read-only on purpose. Mail clients and security scanners prefetch links in email,
+   * so if this mutated, recipients would be unsubscribed without ever clicking.
+   */
+  public static async previewUnsubscribe(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      const preview = await EmailConsentService.preview(req.params.token);
+      res.status(200).json({ success: true, ...preview });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * POST /api/portal/unsubscribe/:token — performs it.
+   *
+   * Also the target of the `List-Unsubscribe-Post` header, which is how Gmail and
+   * Outlook's native unsubscribe button works (RFC 8058 one-click). Idempotent, because
+   * that button and a human clicking the footer link can both fire.
+   */
+  public static async unsubscribe(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      const result = await EmailConsentService.unsubscribe(req.params.token);
+      res.status(200).json({ success: true, ...result });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   // Public: Get estimate for customer viewing
   public static async getEstimate(req: Request, res: Response, next: NextFunction) {
     try {

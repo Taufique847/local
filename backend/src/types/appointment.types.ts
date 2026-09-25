@@ -58,6 +58,23 @@ export interface IPartUsed {
   totalCost: number;
 }
 
+export type RecurrenceFrequency = 'weekly' | 'monthly';
+
+/**
+ * A repeating schedule. See the model for why there are only two frequencies.
+ *
+ * `count` and `until` are alternatives; exactly one is required.
+ */
+export interface IRecurrenceRule {
+  frequency: RecurrenceFrequency;
+  /** Every N weeks or months. Fortnightly is weekly/2, quarterly is monthly/3. */
+  interval: number;
+  /** Total occurrences including the first. */
+  count?: number;
+  /** Last date an occurrence may start on, inclusive. */
+  until?: Date;
+}
+
 export interface IAppointment extends Document {
   _id: Types.ObjectId;
   businessId: Types.ObjectId;
@@ -78,7 +95,20 @@ export interface IAppointment extends Document {
   customerNotes?: string;
   internalNotes?: string;
   cancellationReason?: string;
+  /** Claimed-and-attempted marker for the reminder job. See the model for why. */
+  reminderSentAt?: Date | null;
+  reminderAttempts: number;
+  /** Set when the customer replies to confirm. Not the same as `status: 'confirmed'`. */
+  confirmedByCustomerAt?: Date | null;
   rescheduleHistory: IRescheduleRecord[];
+  /** Set on the first appointment of a repeating series only. */
+  recurrenceRule?: IRecurrenceRule | null;
+  /** Set on every occurrence after the first; null on the parent. */
+  recurrenceParentId?: Types.ObjectId | null;
+  /** How far the series has been materialised. On the parent. */
+  recurrenceGeneratedThrough?: Date | null;
+  /** Set once the series has no occurrences left. See the model for why. */
+  recurrenceCompletedAt?: Date | null;
   checkIn?: ICheckInInfo;
   checkOut?: ICheckInInfo;
   checklist?: IJobChecklistItem[];
@@ -97,7 +127,28 @@ export interface CreateAppointmentInput {
   endAt?: string;
   description?: string;
   address?: string;
+  /**
+   * The technician this job is assigned to.
+   *
+   * This is the real assignment. Nothing used to write `Appointment.technicianId`
+   * at all — only the free-text `technicianName` below — so every appointment
+   * carried `technicianId: null` and the field app's per-technician job scoping
+   * silently matched everything.
+   */
+  technicianId?: string | null;
+  /**
+   * Display name, derived from `technicianId` when one is given.
+   *
+   * Kept because existing records and the dispatch SMS lookup use it, but it is
+   * no longer the source of truth. Supplying it alone still works for a business
+   * that has not created technician records yet.
+   */
   technicianName?: string;
+  /**
+   * Makes this the first visit of a repeating series. The rest are generated after the
+   * booking lock is released, up to `RecurrenceService.HORIZON_DAYS`.
+   */
+  recurrence?: IRecurrenceRule;
   priority?: AppointmentPriority;
   source?: AppointmentSource;
   customerNotes?: string;
@@ -110,6 +161,8 @@ export interface UpdateAppointmentInput {
   endAt?: string;
   description?: string;
   address?: string;
+  /** Pass `null` to unassign. */
+  technicianId?: string | null;
   technicianName?: string;
   priority?: AppointmentPriority;
   status?: AppointmentStatus;
@@ -133,5 +186,7 @@ export interface AppointmentQueryFilter {
   from?: string;    // YYYY-MM-DD range start
   to?: string;      // YYYY-MM-DD range end
   customerId?: string;
+  /** Filter the board to one technician. Preferred over `technicianName`. */
+  technicianId?: string;
   technicianName?: string;
 }

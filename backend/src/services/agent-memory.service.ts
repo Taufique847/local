@@ -3,6 +3,61 @@ import { AgentMemory, IAgentMemory, MemoryCategory } from '../models/agent-memor
 import { Customer } from '../models/customer.model';
 import { Appointment } from '../models/appointment.model';
 import { CallLog } from '../models/call-log.model';
+import { Equipment, EquipmentType, EquipmentLocation } from '../models/equipment.model';
+import { EquipmentService, EquipmentInput } from './equipment.service';
+import { ICustomerProperty } from '../types/customer.types';
+
+/**
+ * Turns a transcript fragment like "Carrier 4T heat pump" into a structured unit.
+ *
+ * Returns `null` rather than guessing when the type cannot be identified — an
+ * `Equipment` row whose type is "other" and whose only real content is a brand name
+ * is the unqueryable free-text problem with a schema wrapped round it.
+ */
+export const parseEquipmentMention = (fragment: string): EquipmentInput | null => {
+  const text = fragment.toLowerCase();
+
+  const typeByKeyword: Array<[RegExp, EquipmentType]> = [
+    [/mini[\s-]?split/, 'mini_split'],
+    [/package unit/, 'package_unit'],
+    [/heat pump/, 'heat_pump'],
+    [/furnace/, 'furnace'],
+    [/boiler/, 'boiler'],
+    [/air handler/, 'air_handler'],
+    [/water heater/, 'water_heater'],
+    [/thermostat/, 'thermostat'],
+    // Last: "ac" is a substring of many words, so only reach it if nothing else matched.
+    [/\bair conditioner\b|\bac\b/, 'air_conditioner'],
+  ];
+
+  const matchedType = typeByKeyword.find(([pattern]) => pattern.test(text))?.[1];
+  if (!matchedType) return null;
+
+  const brandMatch = text.match(
+    /\b(carrier|trane|lennox|goodman|rheem|ruud|york|daikin|bosch|bryant|mitsubishi|fujitsu)\b/
+  );
+
+  return {
+    type: matchedType,
+    // Title-cased so it reads as a brand rather than a lowercased transcript token.
+    brand: brandMatch ? brandMatch[1][0].toUpperCase() + brandMatch[1].slice(1) : undefined,
+    source: 'ai_call',
+  };
+};
+
+/** Maps the spoken location words the regex captures onto the enum. */
+export const parseEquipmentLocation = (value: string): EquipmentLocation | null => {
+  const map: Record<string, EquipmentLocation> = {
+    attic: 'attic',
+    basement: 'basement',
+    'crawl space': 'crawl_space',
+    roof: 'roof',
+    'side yard': 'side_yard',
+    garage: 'garage',
+    closet: 'closet',
+  };
+  return map[value.trim().toLowerCase()] ?? null;
+};
 
 export interface StoreMemoryDTO {
   businessId: Types.ObjectId | string;
@@ -80,7 +135,20 @@ export class AgentMemoryService {
   }
 
   /**
-   * Rule-based extraction of key customer preferences and equipment from conversation text
+   * Rule-based extraction of key customer preferences and equipment from conversation text.
+   *
+   * Now writes to BOTH places, deliberately:
+   *
+   *  - The `AgentMemory` row stays, because it carries provenance — which call, what
+   *    confidence, what the customer actually said. Dropping it would lose the audit
+   *    trail for a value a regex guessed.
+   *  - The structured field or `Equipment` row is what everything else reads. A gate
+   *    code buried in the prose "Gate/entry code is 1234" is not queryable, and it is
+   *    how the dispatch SMS came to print "Customer mentioned dogs/pets on the
+   *    property" in the field labelled Access/Gate.
+   *
+   * Structured writes never overwrite a value a person entered — see
+   * `applyPropertyFact` and `EquipmentService.upsertFromCall`.
    */
   public static async extractMemoriesFromTranscript(
     businessId: Types.ObjectId | string,
@@ -103,6 +171,7 @@ export class AgentMemoryService {
         sourceCallSid: callSid,
       });
       memories.push(mem);
+      await this.applyPropertyFact(businessId, customerId, { gateCode: gateMatch[1] });
     }
 
     // 2. Pets / Dogs Warning
@@ -116,6 +185,10 @@ export class AgentMemoryService {
         sourceCallSid: callSid,
       });
       memories.push(mem);
+      await this.applyPropertyFact(businessId, customerId, {
+        hasPets: true,
+        petNotes: 'Mentioned a dog on the property during a call. Knock or call before entering the yard.',
+      });
     }
 
     // 3. HVAC Equipment Mentions
@@ -130,6 +203,11 @@ export class AgentMemoryService {
         sourceCallSid: callSid,
       });
       memories.push(mem);
+
+      const parsed = parseEquipmentMention(equipMatch[0]);
+      if (parsed) {
+        await EquipmentService.upsertFromCall(businessId, customerId, parsed);
+      }
     }
 
     // 4. Equipment Location
@@ -144,6 +222,18 @@ export class AgentMemoryService {
         sourceCallSid: callSid,
       });
       memories.push(mem);
+
+      const location = parseEquipmentLocation(locMatch[1]);
+      if (location) {
+        /**
+         * Applied to the primary unit rather than creating a new one.
+         *
+         * "The unit is in the attic" names a location, not a unit. Creating an
+         * `Equipment` row from it would leave a typeless record whose only content is
+         * a location.
+         */
+        await this.applyLocationToPrimaryEquipment(businessId, customerId, location);
+      }
     }
 
     // 5. Unresolved issues or follow-up mentions
@@ -160,6 +250,68 @@ export class AgentMemoryService {
     }
 
     return memories;
+  }
+
+  /**
+   * Writes a property fact without clobbering what a person entered.
+   *
+   * A regex reading a transcript is a weaker source than an office manager typing
+   * into a form. Only empty fields are filled, so a gate code the business corrected
+   * by hand survives the customer misremembering it on the next call.
+   */
+  public static async applyPropertyFact(
+    businessId: Types.ObjectId | string,
+    customerId: Types.ObjectId | string,
+    facts: Partial<ICustomerProperty>
+  ): Promise<void> {
+    try {
+      const customer = await Customer.findOne({ _id: customerId, businessId }).select('property');
+      if (!customer) return;
+
+      const current = (customer.property ?? {}) as ICustomerProperty;
+      const updates: Record<string, unknown> = {};
+
+      for (const [key, value] of Object.entries(facts)) {
+        if (value === undefined || value === null || value === '') continue;
+        const existing = (current as Record<string, unknown>)[key];
+        // `hasPets: false` is a real answer, so `undefined` is the only empty state.
+        if (existing !== undefined && existing !== null && existing !== '') continue;
+        updates[`property.${key}`] = value;
+      }
+
+      if (!Object.keys(updates).length) return;
+
+      await Customer.updateOne({ _id: customerId, businessId }, { $set: updates });
+    } catch (err: any) {
+      // Capture is best-effort; a failure must not break the call that produced it.
+      console.warn('Could not apply property fact:', err?.message);
+    }
+  }
+
+  /**
+   * Records where the equipment lives, on the unit it most likely refers to.
+   *
+   * Prefers the primary unit, falls back to the only unit, and does nothing when
+   * there are several and none is primary — guessing between a furnace in the
+   * basement and an AC on the roof would be worse than leaving it unset.
+   */
+  private static async applyLocationToPrimaryEquipment(
+    businessId: Types.ObjectId | string,
+    customerId: Types.ObjectId | string,
+    location: EquipmentLocation
+  ): Promise<void> {
+    try {
+      const units = await Equipment.find({ businessId, customerId, active: true });
+      if (!units.length) return;
+
+      const target = units.find((u) => u.isPrimary) ?? (units.length === 1 ? units[0] : null);
+      if (!target || target.location) return;
+
+      target.location = location;
+      await target.save();
+    } catch (err: any) {
+      console.warn('Could not apply equipment location:', err?.message);
+    }
   }
 
   /**
@@ -215,9 +367,74 @@ export class AgentMemoryService {
       lines.push(`- Lifetime Value: $${customer.lifetimeValue}`);
     }
 
-    if (memories.length > 0) {
-      lines.push('- Saved Facts & Equipment Context:');
-      for (const m of memories) {
+    /**
+     * Structured fields first, and they replace rather than supplement the memory
+     * rows they came from.
+     *
+     * The memory rows are prose a regex assembled — "Gate/entry code is 1234",
+     * "Equipment located in attic". Feeding both to the model means the same fact
+     * appears twice in different wordings, which is how an assistant ends up
+     * repeating itself or reading out a stale value alongside the corrected one.
+     */
+    if (customer.propertyType) {
+      lines.push(`- Property Type: ${customer.propertyType}`);
+    }
+
+    const property = (customer.property ?? {}) as ICustomerProperty;
+    const propertyLines: string[] = [];
+
+    if (property.gateCode) propertyLines.push(`Gate/entry code: ${property.gateCode}`);
+    if (property.accessInstructions) propertyLines.push(`Access: ${property.accessInstructions}`);
+    if (property.hasPets) {
+      propertyLines.push(`Pets on site${property.petNotes ? `: ${property.petNotes}` : ''}`);
+    }
+    if (property.parkingNotes) propertyLines.push(`Parking: ${property.parkingNotes}`);
+    if (property.propertyNotes) propertyLines.push(`Property: ${property.propertyNotes}`);
+
+    if (propertyLines.length) {
+      lines.push('- Access & Property Notes:');
+      for (const line of propertyLines) lines.push(`  * ${line}`);
+    }
+
+    const equipment = await Equipment.find({ businessId: bId, customerId: cId, active: true }).sort({
+      isPrimary: -1,
+      installYear: -1,
+    });
+
+    if (equipment.length) {
+      lines.push('- Equipment On File:');
+      for (const unit of equipment) {
+        const warranty = unit.warrantyExpiresAt
+          ? unit.warrantyExpiresAt.getTime() > Date.now()
+            ? ' [under warranty]'
+            : ' [warranty expired]'
+          : '';
+        lines.push(
+          `  * ${EquipmentService.describe(unit)}${unit.isPrimary ? ' (primary)' : ''}${warranty}${
+            unit.filterSize ? `, filter ${unit.filterSize}` : ''
+          }`
+        );
+      }
+    }
+
+    /**
+     * Only the memories not now represented as structured data.
+     *
+     * The four extracted keys are excluded because they are the *source* of the
+     * fields above. Everything else — unresolved issues, preferences a human noted —
+     * still has nowhere structured to live and is passed through unchanged.
+     */
+    const supersededKeys = new Set([
+      'access_code',
+      'pets_on_property',
+      'primary_equipment',
+      'equipment_location',
+    ]);
+    const remainingMemories = memories.filter((m) => !supersededKeys.has(m.key));
+
+    if (remainingMemories.length > 0) {
+      lines.push('- Other Saved Facts:');
+      for (const m of remainingMemories) {
         lines.push(`  * [${m.category.toUpperCase()}]: ${m.value}`);
       }
     }

@@ -212,11 +212,26 @@ export default function WorkerPWAPage() {
     if (!activeJob || !newPartName || !newPartCost) return;
     triggerHaptic(40);
 
+    /**
+     * `unitCost`, which is the field that exists.
+     *
+     * This posted `unitPrice`. `Appointment.partsUsed` carries `partName`, `quantity`,
+     * `unitCost` and `totalCost` — Mongoose silently discards a key the subdocument schema
+     * does not have, so `unitCost` fell to its default of 0 and every part a technician
+     * logged from the field was billed at **$0.00**. The list below reads `p.unitCost` and
+     * was rendering `$undefined/unit`, which was the only visible symptom.
+     *
+     * The same class of defect as the `svc.price` / `startingPrice` mismatch that made
+     * every field invoice $189: writing a field that is not on the schema, which Mongoose
+     * tolerates in both directions.
+     *
+     * `partNumber` is dropped for the same reason — it is not on the schema either, so it
+     * was never stored and nothing ever read it back.
+     */
     const newPart = {
       partName: newPartName,
-      partNumber: `BC-PRT-${Math.floor(1000 + Math.random() * 9000)}`,
       quantity: Number(newPartQty),
-      unitPrice: Number(newPartCost),
+      unitCost: Number(newPartCost),
     };
 
     const updatedParts = [...(activeJob.partsUsed || []), newPart];
@@ -245,14 +260,27 @@ export default function WorkerPWAPage() {
 
     setActionLoading(true);
     try {
-      const result = await WorkerService.completeJobAndGenerateInvoice(activeJob._id, {
-        diagnosticFeeCredit: 89,
-        additionalLaborHours: 1,
-      });
+      /**
+       * Nothing is invented here.
+       *
+       * This posted `diagnosticFeeCredit: 89` and `additionalLaborHours: 1` on every
+       * tap. The 89 was the last literal left over from the hardcoded pricing, and it
+       * overrode whatever the business had actually configured. The extra hour was
+       * worse: no technician had said they worked it, and it was billed at the labour
+       * rate on every job closed from the field.
+       *
+       * Sending neither means the credit comes from the business's own policy and the
+       * customer is billed for the work that was recorded.
+       */
+      const result = await WorkerService.completeJobAndGenerateInvoice(activeJob._id, {});
       setActiveJob(result.appointment);
       setJobs((prev) => prev.map((j) => (j._id === result.appointment._id ? result.appointment : j)));
       setGeneratedInvoice(result.invoice);
-      toast.success('Work Complete & Invoiced!', '1-Tap customer invoice created with $89 diagnostic fee deduction.');
+      toast.success(
+        'Work Complete & Invoiced!',
+        // The actual figure off the invoice, not a hardcoded "$89" that could disagree.
+        `Customer invoice created for $${(result.invoice?.totalAmount ?? 0).toFixed(2)}.`
+      );
     } catch (err: any) {
       triggerHaptic([100, 50, 100]);
       toast.error('Completion Failed', err.message || 'Failed to complete job.');

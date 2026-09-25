@@ -1,9 +1,13 @@
 import { Types } from 'mongoose';
 import { Appointment } from '../models/appointment.model';
 import { Technician } from '../models/technician.model';
+import { Customer } from '../models/customer.model';
 import { Invoice } from '../models/invoice.model';
 import { Service } from '../models/service.model';
 import { DocumentNumberService } from './document-number.service';
+import { PolicyGuardrailsService } from './policy-guardrails.service';
+import { NotificationService } from './notification.service';
+import { PricingService, PricingLineItem } from './pricing.service';
 import { generateShareToken } from '../utils/share-token';
 import { AppError } from '../types';
 
@@ -213,23 +217,71 @@ export class WorkerService {
     };
     await apt.save();
 
-    // Prepare line items
-    const items: Array<{ description: string; quantity: number; unitPrice: number; total: number }> = [];
+    /**
+     * Same rollup as the dashboard completion path.
+     *
+     * This path sets `status` directly rather than going through
+     * `AppointmentService.updateStatus`, so it does not inherit that method's
+     * side effects and needs its own. `$max` guards against a technician closing an
+     * older job after a newer one.
+     */
+    await Customer.updateOne(
+      { _id: apt.customerId, businessId: apt.businessId },
+      { $max: { lastServiceAt: apt.startAt } }
+    ).catch((err: any) => console.warn('Could not stamp customer lastServiceAt:', err?.message));
+
+    /**
+     * Rates come from the business's own policy, not from literals in this file.
+     *
+     * Every number below used to be hardcoded here — $189 base, $95 labour, $89
+     * diagnostic credit and an 8.25% tax rate the caller could not override. A
+     * business with different pricing was billed the wrong amount on every job
+     * completed from the field app, with no way to correct it.
+     */
+    const policy = await PolicyGuardrailsService.getPolicy(apt.businessId);
+
+    /**
+     * Line totals are not computed here.
+     *
+     * `PricingService.quote` derives every `total` from quantity and unit price. The
+     * parts loop below used to write `part.totalCost || part.quantity * part.unitCost`,
+     * which billed a stored figure that could disagree with the quantity and price
+     * printed next to it on the same invoice line.
+     */
+    const items: PricingLineItem[] = [];
 
     const svc = apt.serviceId as any;
-    if (svc) {
+
+    /**
+     * `startingPrice` is the field that exists.
+     *
+     * This read `svc.price`, which is not on the Service schema at all, so it was
+     * always `undefined` and every invoice fell through to the $189 literal —
+     * including for a $450 service. The bug was invisible because the fallback
+     * produced a plausible-looking number.
+     */
+    const servicePrice =
+      typeof svc?.startingPrice === 'number' ? svc.startingPrice : null;
+
+    if (svc && servicePrice !== null) {
       items.push({
         description: svc.name || 'HVAC Standard Diagnostics & Service',
         quantity: 1,
-        unitPrice: svc.price || 189,
-        total: svc.price || 189,
+        unitPrice: servicePrice,
+      });
+    } else if (svc) {
+      // The service exists but carries no price. Bill the diagnostic fee, which is
+      // the one figure the business has authorised, rather than inventing one.
+      items.push({
+        description: svc.name || 'HVAC Standard Diagnostics & Service',
+        quantity: 1,
+        unitPrice: policy.diagnosticFee,
       });
     } else {
       items.push({
         description: 'Standard HVAC Diagnostic & System Repair',
         quantity: 1,
-        unitPrice: 189,
-        total: 189,
+        unitPrice: policy.diagnosticFee,
       });
     }
 
@@ -240,29 +292,41 @@ export class WorkerService {
           description: `Part: ${part.partName}`,
           quantity: part.quantity,
           unitPrice: part.unitCost,
-          total: part.totalCost || part.quantity * part.unitCost,
         });
       }
     }
 
     // Add extra labor if any
     if (data.additionalLaborHours && data.additionalLaborHours > 0) {
-      const rate = data.laborRate || 95;
       items.push({
         description: `Field Technician Labor (${data.additionalLaborHours} hrs)`,
         quantity: data.additionalLaborHours,
-        unitPrice: rate,
-        total: data.additionalLaborHours * rate,
+        unitPrice: data.laborRate ?? policy.laborRate,
       });
     }
 
-    // Calculate totals
-    const subtotal = items.reduce((sum, item) => sum + item.total, 0);
-    const diagCredit = data.diagnosticFeeCredit ?? 89; // Default $89 diagnostic fee credit
-    const taxableSubtotal = Math.max(0, subtotal - diagCredit);
-    const taxRate = 0.0825;
-    const taxAmount = parseFloat((taxableSubtotal * taxRate).toFixed(2));
-    const totalAmount = parseFloat((taxableSubtotal + taxAmount).toFixed(2));
+    /**
+     * Same pricing engine as the dashboard and the portal.
+     *
+     * The copy that lived here read `policy.taxRate` but had previously hardcoded
+     * 8.25%, and it never billed the emergency fee — so the after-hours callout the
+     * AI quoted on the phone was invoiced as a routine visit by the very path that
+     * closes those jobs.
+     */
+    const { emergency, travelFee } = await PricingService.resolveJobContext(businessId, {
+      priority: (apt as any).priority ?? null,
+      customerId: apt.customerId,
+    });
+
+    const quote = PricingService.quote(
+      {
+        items,
+        diagnosticFeeCredit: data.diagnosticFeeCredit ?? policy.diagnosticFee,
+        emergency,
+        travelFee,
+      },
+      policy
+    );
 
     // Atomic counter, not countDocuments+1 — see DocumentNumberService.
     const invoiceNumber = await DocumentNumberService.next(apt.businessId, 'invoice');
@@ -276,18 +340,30 @@ export class WorkerService {
       appointmentId: apt._id,
       invoiceNumber,
       title: `${apt.title || 'HVAC Service'} - Completed Field Work Order`,
-      items,
-      subtotal,
-      diagnosticFeeCredit: diagCredit,
-      taxRate,
-      taxAmount,
-      totalAmount,
+      items: quote.items,
+      subtotal: quote.subtotal,
+      diagnosticFeeCredit: quote.diagnosticFeeCredit,
+      emergencyFee: quote.emergencyFee,
+      travelFee: quote.travelFee,
+      taxRate: quote.taxRate,
+      taxAmount: quote.taxAmount,
+      totalAmount: quote.totalAmount,
       amountPaid: 0,
-      balanceDue: totalAmount,
+      balanceDue: quote.totalAmount,
       status: 'unpaid',
       notes: data.notes || 'Work completed on site. Diagnostic fee credited to repair total.',
       shareToken,
     });
+
+    /**
+     * The job is finished and the customer now has a bill they can actually pay.
+     *
+     * This was the worst of the three silent invoice paths: the technician closes
+     * the work order on site and leaves, and nothing whatsoever reached the
+     * homeowner — no total, no link, no receipt. Collection depended entirely on
+     * the owner noticing and following up by hand.
+     */
+    await NotificationService.notifyInvoice(invoice, 'invoice_issued');
 
     return { appointment: apt, invoice };
   }

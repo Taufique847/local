@@ -68,6 +68,42 @@ export class CommunicationController {
     }
   }
 
+  // GET /api/messages/needs-attention
+  public static async getNeedsAttention(
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      if (!req.user) throw new AppError('Authentication required', 401);
+      const businessId = await CommunicationController.getBusinessId(req.user.id);
+      const result = await CommunicationService.getNeedsAttention(businessId, req.query);
+      sendSuccess(res, { success: true, ...result }, 200);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  // POST /api/messages/:id/resolve-attention
+  public static async resolveAttention(
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      if (!req.user) throw new AppError('Authentication required', 401);
+      const businessId = await CommunicationController.getBusinessId(req.user.id);
+      const message = await CommunicationService.resolveAttention(
+        businessId,
+        req.params.id,
+        req.user.id
+      );
+      sendSuccess(res, { success: true, message }, 200);
+    } catch (error) {
+      next(error);
+    }
+  }
+
   /**
    * POST /api/webhooks/twilio/sms (public webhook)
    *

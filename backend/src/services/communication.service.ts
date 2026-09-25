@@ -7,7 +7,11 @@ import {
   ICommunicationLog,
   SendMessageInput,
   MessageType,
+  MessageChannel,
+  NotificationVars,
+  MESSAGE_CHANNELS,
 } from '../types/communication.types';
+import { renderNotification } from './notification-templates';
 import { config } from '../config/env';
 import { AppError } from '../types';
 import { logger } from '../utils/logger';
@@ -43,43 +47,19 @@ export class CommunicationService {
   }
 
   /**
-   * Renders pre-approved templates with dynamic context variables
+   * Renders the SMS body for a message type.
+   *
+   * Now a thin delegate. The copy itself moved to `notification-templates.ts` so
+   * that the SMS and email versions of a message are defined next to each other
+   * and cannot drift — this switch and the email copy being maintained in
+   * separate files is exactly how a customer ends up with a confirmation text and
+   * a confirmation email that disagree about the appointment time.
+   *
+   * Kept as a public method because the voice agent's booking tool calls it
+   * directly.
    */
-  public static renderTemplate(
-    type: MessageType,
-    vars: {
-      customerName?: string;
-      businessName?: string;
-      businessPhone?: string;
-      dateTime?: string;
-      address?: string;
-      serviceName?: string;
-    }
-  ): string {
-    const cust = vars.customerName || 'valued customer';
-    const biz = vars.businessName || 'our HVAC team';
-    const phone = vars.businessPhone || '';
-    const dt = vars.dateTime || 'your scheduled time';
-    const addr = vars.address ? ` at ${vars.address}` : '';
-    const srv = vars.serviceName ? ` for ${vars.serviceName}` : '';
-
-    switch (type) {
-      case 'appointment_confirmation':
-        return `Hi ${cust}, your appointment with ${biz}${srv} is confirmed for ${dt}${addr}. Reply STOP to cancel notifications.`;
-      case 'appointment_reminder':
-        return `Reminder: Your HVAC appointment with ${biz} is scheduled for tomorrow at ${dt}${addr}. Please let us know if you need to reschedule!`;
-      case 'appointment_rescheduled':
-        return `Hi ${cust}, your appointment with ${biz} has been rescheduled to ${dt}${addr}. Thank you!`;
-      case 'appointment_cancelled':
-        return `Hi ${cust}, your appointment with ${biz} has been cancelled. Call us at ${phone} to rebook whenever you're ready.`;
-      case 'missed_call_followup':
-        return `Hi! Sorry we missed your call at ${biz}. How can we help you with your heating or AC today?`;
-      case 'lead_followup':
-        return `Hi ${cust}, thank you for contacting ${biz}. Our team is reviewing your service request and will follow up shortly!`;
-      case 'custom':
-      default:
-        return '';
-    }
+  public static renderTemplate(type: MessageType, vars: NotificationVars): string {
+    return renderNotification(type, 'sms', vars)?.body || '';
   }
 
   /**
@@ -102,7 +82,7 @@ export class CommunicationService {
      */
     if (input.customerId) {
       const customer = await Customer.findOne({ _id: input.customerId, businessId });
-      if (customer && (customer as any).isOptedOut) {
+      if (customer && customer.isOptedOut) {
         throw new AppError(
           'This customer has opted out of text messages and cannot be contacted by SMS.',
           409
@@ -237,25 +217,52 @@ export class CommunicationService {
 
     const customer = await Customer.findOne({ businessId, phone: From });
 
-    // Handle TCPA opt-out keywords
+    /**
+     * Carrier-standard TCPA keywords, and only those.
+     *
+     * `YES` used to be an opt-in keyword. It is not a carrier standard, and it is
+     * the single most likely thing a customer types in reply to any message — so a
+     * customer answering "YES" to an appointment reminder had their reply consumed
+     * as a marketing opt-in. Worse, the opt-in branch did not return, so execution
+     * continued into the lead-recovery handler, whose intent regex matches "yes"
+     * and which would book them a SECOND appointment for the next morning and text
+     * a confirmation for it.
+     *
+     * `CANCEL` stays in the opt-out list even though a customer may well mean
+     * "cancel my appointment": it is a carrier-mandated opt-out keyword and
+     * treating it as anything else risks a TCPA violation. Appointment
+     * cancellation by reply needs its own distinct keyword.
+     */
     const optOutKeywords = ['STOP', 'STOPALL', 'UNSUBSCRIBE', 'CANCEL', 'END', 'QUIT'];
-    const optInKeywords = ['START', 'UNSTOP', 'YES'];
+    const optInKeywords = ['START', 'UNSTOP'];
 
-    if (optOutKeywords.includes(upper)) {
-      if (customer) {
-        (customer as any).isOptedOut = true;
-        customer.notes = `${customer.notes || ''} [SMS Opt-Out requested via text]`.trim();
-        await customer.save();
-      }
-    } else if (optInKeywords.includes(upper)) {
-      if (customer) {
-        (customer as any).isOptedOut = false;
-        customer.notes = `${customer.notes || ''} [SMS Opt-In confirmed via text]`.trim();
+    const isOptOut = optOutKeywords.includes(upper);
+    const isOptIn = optInKeywords.includes(upper);
+
+    if (customer && (isOptOut || isOptIn)) {
+      const wasOptedOut = Boolean(customer.isOptedOut);
+      const nowOptedOut = isOptOut;
+
+      /**
+       * Only written when the state actually changes.
+       *
+       * This appended to `notes` on every matching message. `notes` has a 2000
+       * character cap, so a customer texting STOP a few dozen times would
+       * eventually make `customer.save()` fail validation and take the whole
+       * inbound webhook down with it.
+       */
+      if (wasOptedOut !== nowOptedOut) {
+        customer.isOptedOut = nowOptedOut;
+        customer.optedOutAt = nowOptedOut ? new Date() : null;
+        const note = nowOptedOut
+          ? '[SMS Opt-Out requested via text]'
+          : '[SMS Opt-In confirmed via text]';
+        customer.notes = `${customer.notes || ''} ${note}`.trim().slice(0, 2000);
         await customer.save();
       }
     }
 
-    await CommunicationLog.create({
+    const inboundLog = await CommunicationLog.create({
       businessId,
       customerId: customer?._id || null,
       direction: 'inbound',
@@ -265,13 +272,68 @@ export class CommunicationService {
       to: To,
       body: text,
       status: 'received',
+      /**
+       * Flagged on arrival, cleared by whichever handler answers it.
+       *
+       * This direction is deliberate. Flagging on failure instead would mean any
+       * branch added later that forgets to flag silently reintroduces the original
+       * bug — a customer question logged, unanswered and invisible. Starting
+       * flagged makes forgetting safe: the worst case is an owner reading a
+       * message that was in fact handled.
+       */
+      needsAttention: true,
       twilioSid: MessageSid,
     });
 
-    if (optOutKeywords.includes(upper)) {
+    /** Called by the handler that answered this message. */
+    const claim = async (): Promise<void> => {
+      inboundLog.needsAttention = false;
+      await inboundLog.save();
+    };
+
+    if (isOptOut) {
+      await claim();
       return {
         reply: 'You have been unsubscribed from notifications and will receive no further messages. Reply START to resubscribe.',
       };
+    }
+
+    /**
+     * Returns rather than falling through.
+     *
+     * A consent keyword is a complete instruction on its own. Letting it continue
+     * into the CSAT and lead-recovery handlers is what turned a one-word reply
+     * into a booking.
+     */
+    if (isOptIn) {
+      await claim();
+      return {
+        reply: 'You are subscribed again and will receive appointment updates. Reply STOP at any time to unsubscribe.',
+      };
+    }
+
+    /**
+     * Appointment confirm / reschedule, ahead of the CSAT and recovery handlers.
+     *
+     * Placed AFTER the consent keywords, not before. `CANCEL` is a
+     * carrier-mandated opt-out keyword, and a customer typing it almost certainly
+     * means "cancel my appointment" — but acting on that reading instead of
+     * honouring the opt-out is a TCPA violation, so consent wins and appointment
+     * cancellation needs its own distinct keyword.
+     *
+     * Placed BEFORE CSAT and recovery because a bare `C` or `R` from a customer
+     * with an upcoming job is unambiguous, and the recovery handler's intent regex
+     * is loose enough to swallow short replies.
+     */
+    try {
+      const { AppointmentReplyService } = await import('./appointment-reply.service');
+      const replyRes = await AppointmentReplyService.handleInboundReply(businessId, From, text);
+      if (replyRes.handled && replyRes.replyMessage) {
+        await claim();
+        return { reply: replyRes.replyMessage };
+      }
+    } catch (err: any) {
+      logger.warn('inbound_appointment_reply_error', { reason: err?.message });
     }
 
     // Area 4: Review / CSAT rating reply (1-5 stars)
@@ -283,10 +345,11 @@ export class CommunicationService {
         text
       );
       if (ratingRes.handled && ratingRes.responseText) {
+        await claim();
         return { reply: ratingRes.responseText };
       }
     } catch (err: any) {
-      console.warn('Error checking review CSAT in inbound SMS:', err.message);
+      logger.warn('inbound_csat_error', { reason: err?.message });
     }
 
     // Area 1: Speed-to-lead recovery reply
@@ -298,13 +361,76 @@ export class CommunicationService {
         text
       );
       if (recoveryRes.handled && recoveryRes.replyMessage) {
+        await claim();
         return { reply: recoveryRes.replyMessage };
       }
     } catch (err: any) {
-      console.warn('Error checking lead recovery in inbound SMS:', err.message);
+      logger.warn('inbound_lead_recovery_error', { reason: err?.message });
     }
 
+    /**
+     * Nothing claimed it, so the flag set at creation stands and a person has to
+     * read it.
+     *
+     * This is where an inbound message used to end: logged, unanswered, and
+     * invisible. The customer still gets no automated reply — inventing one would
+     * be worse than silence — but the owner now has a queue.
+     */
     return {};
+  }
+
+  /**
+   * Inbound messages no automated handler could answer.
+   *
+   * Deliberately a separate query rather than a filter on the main list: the
+   * point is that it is short and can be emptied, and burying it in a paginated
+   * history of every message is what made the problem invisible.
+   */
+  public static async getNeedsAttention(
+    businessId: Types.ObjectId | string,
+    filter: { page?: string | number; limit?: string | number } = {}
+  ): Promise<{ messages: ICommunicationLog[]; total: number; page: number; totalPages: number }> {
+    const page = Math.max(1, Number(filter.page) || 1);
+    const limit = Math.min(100, Math.max(1, Number(filter.limit) || 20));
+
+    const query = { businessId, needsAttention: true, attentionResolvedAt: null };
+
+    const [messages, total] = await Promise.all([
+      CommunicationLog.find(query)
+        .sort({ createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .populate('customerId', 'firstName lastName phone email'),
+      CommunicationLog.countDocuments(query),
+    ]);
+
+    return { messages, total, page, totalPages: Math.ceil(total / limit) || 1 };
+  }
+
+  /** Marks a flagged message as dealt with. Scoped by businessId. */
+  public static async resolveAttention(
+    businessId: Types.ObjectId | string,
+    messageId: string,
+    resolvedBy?: string
+  ): Promise<ICommunicationLog> {
+    if (!Types.ObjectId.isValid(messageId)) {
+      throw new AppError('Message not found', 404);
+    }
+
+    const message = await CommunicationLog.findOneAndUpdate(
+      { _id: messageId, businessId, needsAttention: true },
+      {
+        $set: {
+          needsAttention: false,
+          attentionResolvedAt: new Date(),
+          attentionResolvedBy: resolvedBy || 'owner',
+        },
+      },
+      { new: true }
+    );
+
+    if (!message) throw new AppError('Message not found', 404);
+    return message;
   }
 
   /**
@@ -327,8 +453,12 @@ export class CommunicationService {
 
     const status = statusMap[MessageStatus.toLowerCase()] || 'sent';
 
+    // Scoped to the SMS channel. `twilioSid` is now only ever written by this
+    // path, but an unscoped match on a shared log is the kind of thing that
+    // starts overwriting email rows the moment another provider reuses an id
+    // format.
     await CommunicationLog.findOneAndUpdate(
-      { twilioSid: MessageSid },
+      { twilioSid: MessageSid, channel: 'sms' },
       {
         $set: {
           status,
@@ -350,6 +480,7 @@ export class CommunicationService {
       customerId?: string;
       status?: string;
       direction?: string;
+      channel?: string;
     }
   ): Promise<{ messages: ICommunicationLog[]; total: number; page: number; totalPages: number }> {
     const page = Math.max(1, Number(filter.page) || 1);
@@ -360,6 +491,18 @@ export class CommunicationService {
     if (filter.customerId) query.customerId = filter.customerId;
     if (filter.status && filter.status !== 'all') query.status = filter.status;
     if (filter.direction && filter.direction !== 'all') query.direction = filter.direction;
+    // Validated against the known channels rather than passed through. An
+    // unrecognised value would otherwise match nothing and read as "no messages"
+    // instead of a bad request.
+    if (filter.channel && filter.channel !== 'all') {
+      if (!MESSAGE_CHANNELS.includes(filter.channel as MessageChannel)) {
+        throw new AppError(
+          `Unknown channel "${filter.channel}". Expected one of: ${MESSAGE_CHANNELS.join(', ')}.`,
+          400
+        );
+      }
+      query.channel = filter.channel;
+    }
 
     const [messages, total] = await Promise.all([
       CommunicationLog.find(query)

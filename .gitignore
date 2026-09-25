@@ -27,8 +27,9 @@ frontend/.env.*
 !frontend/.env.example
 
 # Credential and session artifacts.
-# `backend/cookies.txt` was previously committed — it is a curl cookie jar and
-# can contain a live auth session cookie.
+# A curl cookie jar can hold a live auth session cookie. Ignored on the filename
+# so nobody has to judge whether a given one happens to be populated — that is
+# the judgement that gets skipped under time pressure.
 cookies.txt
 *.cookies
 *.pem

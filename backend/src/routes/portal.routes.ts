@@ -24,6 +24,18 @@ router.post(
   PortalController.approveEstimate as any
 );
 
+/**
+ * Marketing email unsubscribe.
+ *
+ * GET only *describes* what unsubscribing would do; POST performs it. That split is
+ * deliberate and not REST pedantry: mail clients and security scanners prefetch links
+ * in email, so a GET that opted someone out would unsubscribe recipients who never
+ * clicked anything. The `List-Unsubscribe-Post` header on campaign mail points at the
+ * POST, which is what RFC 8058 one-click requires.
+ */
+router.get('/unsubscribe/:token', PortalController.previewUnsubscribe as any);
+router.post('/unsubscribe/:token', PortalController.unsubscribe as any);
+
 // Public customer invoice endpoints
 router.get('/invoices/:token', PortalController.getInvoice as any);
 router.post('/invoices/:token/checkout', PortalController.createInvoiceCheckout as any);

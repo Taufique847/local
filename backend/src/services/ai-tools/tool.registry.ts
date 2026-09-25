@@ -271,42 +271,19 @@ export class ToolRegistry {
           'ai_receptionist'
         );
 
-        // Trigger SMS Confirmation automatically
-        const customer = await Customer.findById(args.customerId);
-        if (customer && customer.phone) {
-          try {
-            const dateStr = new Date(args.startAt).toLocaleString('en-US', {
-              weekday: 'short',
-              month: 'short',
-              day: 'numeric',
-              hour: 'numeric',
-              minute: '2-digit',
-            });
-            const customerAddressStr = customer.address
-              ? typeof customer.address === 'string'
-                ? customer.address
-                : customer.address.street
-              : undefined;
-
-            const smsBody = CommunicationService.renderTemplate('appointment_confirmation', {
-              businessName: ctx.businessName,
-              customerName: customer.firstName,
-              dateTime: dateStr,
-              address: args.serviceAddress || customerAddressStr,
-              serviceName: 'HVAC Service',
-            });
-            await CommunicationService.sendMessage(ctx.businessId, {
-              to: customer.phone,
-              body: smsBody,
-              type: 'appointment_confirmation',
-              customerId: customer._id.toString(),
-              appointmentId: appointment._id.toString(),
-              bypassQuietHours: true, // transactional confirmation allowed
-            });
-          } catch (smsErr) {
-            console.warn('Could not dispatch appointment SMS confirmation:', smsErr);
-          }
-        }
+        /**
+         * No confirmation send here any more.
+         *
+         * `AppointmentService.createAppointment` now sends it for every booking
+         * path, so the hand-rolled block that used to live here would deliver a
+         * second, differently-worded text for the same appointment.
+         *
+         * What was here was also wrong in two ways worth recording: it formatted
+         * the time with `toLocaleString` and no `timeZone`, so the customer was
+         * told the appointment time in the *server's* zone, and it hardcoded the
+         * service name as "HVAC Service" regardless of what was actually booked.
+         * Both are fixed by going through the shared path.
+         */
 
         return {
           success: true,

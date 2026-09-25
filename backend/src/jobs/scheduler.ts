@@ -1,6 +1,8 @@
 import * as cron from 'node-cron';
 import { LeadRecoveryService } from '../services/lead-recovery.service';
 import { ReviewReputationService } from '../services/review-reputation.service';
+import { AppointmentReminderService } from '../services/appointment-reminder.service';
+import { RecurrenceService } from '../services/recurrence.service';
 import { BillingService } from '../services/billing.service';
 import { DataRetentionService } from '../services/data-retention.service';
 import { LockService } from '../services/lock.service';
@@ -79,6 +81,39 @@ export class JobScheduler {
       schedule: '*/15 * * * *',
       run: () => ReviewReputationService.processSlaBreaches(),
       lockTtlMs: 10 * 60_000,
+    },
+    {
+      name: 'appointment_reminders',
+      /**
+       * Every fifteen minutes.
+       *
+       * Fine-grained enough that a reminder lands close to its configured lead
+       * time, and coarse enough that a business whose quiet-hours window has just
+       * opened does not get its whole backlog fired inside one minute. Nothing is
+       * lost between ticks: due-ness is derived from `startAt` and the claim is a
+       * durable field, not a timer.
+       */
+      schedule: '*/15 * * * *',
+      run: () => AppointmentReminderService.processDueReminders(),
+      // Comfortably longer than a full 500-appointment batch, so the lock cannot
+      // expire mid-run and admit a second instance.
+      lockTtlMs: 10 * 60_000,
+    },
+    {
+      name: 'recurrence_topup',
+      /**
+       * Twice a day, off-peak.
+       *
+       * A series is materialised 120 days ahead, so the window only needs extending on a
+       * scale of weeks — running this every minute would ask the same question thousands
+       * of times for an answer that changes once a quarter. Twice rather than once so a
+       * single missed run is not a whole day of drift, and off-peak because it takes the
+       * per-business booking lock and should not be competing with live bookings for it.
+       */
+      schedule: '25 4,16 * * *',
+      run: () => RecurrenceService.topUpSeries(),
+      // Comfortably longer than 500 series each generating up to 60 occurrences.
+      lockTtlMs: 30 * 60_000,
     },
     {
       name: 'expire_trials',

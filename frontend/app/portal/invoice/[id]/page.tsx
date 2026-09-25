@@ -327,6 +327,34 @@ export default function PublicInvoicePortalPage() {
                 </div>
               )}
 
+              {/*
+                The discount, with the reason it was given.
+
+                The emergency callout and travel charges are not repeated here — they
+                already appear as their own rows in the line-item table above, which is
+                where a customer looks for what they are being charged for. The discount
+                is the one figure that moves the total and has no line of its own, so
+                without this row the bill simply came to less than its items and said
+                nothing about why.
+              */}
+              {invoice.discountAmount > 0 && (
+                <div className="flex justify-between gap-3 text-emerald-700 font-bold bg-emerald-50 p-2 rounded-xl border border-emerald-200">
+                  <span>
+                    Discount
+                    {invoice.discountType === 'percentage' && invoice.discountValue
+                      ? ` (${invoice.discountValue}%)`
+                      : ''}
+                    :
+                    {invoice.discountReason ? (
+                      <span className="block font-medium text-[11px] text-emerald-800/80">
+                        {invoice.discountReason}
+                      </span>
+                    ) : null}
+                  </span>
+                  <span className="font-mono shrink-0">-${invoice.discountAmount.toFixed(2)}</span>
+                </div>
+              )}
+
               <div className="flex justify-between text-slate-600">
                 <span>Sales Tax ({((invoice.taxRate || 0.0825) * 100).toFixed(2)}%):</span>
                 <span className="font-mono">${invoice.taxAmount.toFixed(2)}</span>

@@ -1,6 +1,7 @@
 import { Response, NextFunction } from 'express';
 import { CustomerService } from '../services/customer.service';
 import { DataRetentionService } from '../services/data-retention.service';
+import { EmailConsentService } from '../services/email-consent.service';
 import { BusinessContextService } from '../services/business-context.service';
 import { AuthenticatedRequest } from '../types/auth.types';
 import { sendSuccess } from '../utils/response';
@@ -54,6 +55,31 @@ export class CustomerController {
       const businessId = await CustomerController.getBusinessId(req.user.id);
       const result = await DataRetentionService.erasePersonalData(businessId, req.params.id);
       sendSuccess(res, { success: true, ...result }, 200);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * POST /api/customers/:id/resubscribe-email
+   *
+   * Clears the marketing-email opt-out. Staff-only and not reachable from a link —
+   * see the route for why a re-subscribe link in an email would be a mistake.
+   */
+  public static async resubscribeEmail(
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      if (!req.user) throw new AppError('Authentication required', 401);
+      const businessId = await CustomerController.getBusinessId(req.user.id);
+      await EmailConsentService.resubscribe(businessId, req.params.id);
+      sendSuccess(
+        res,
+        { success: true, message: 'This customer will receive marketing email again.' },
+        200
+      );
     } catch (error) {
       next(error);
     }

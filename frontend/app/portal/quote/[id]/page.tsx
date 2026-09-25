@@ -212,12 +212,25 @@ export default function PublicQuotePortalPage() {
   const activeTier = hasTiers
     ? estimate.tiers.find((t: any) => t.tierId === selectedTierId) || estimate.tiers[0]
     : null;
+  /**
+   * Every figure is read from the tier, not recomputed here.
+   *
+   * This page used to derive the tier's tax in the browser:
+   * `(tierSubtotal - diagnosticFeeCredit) * (taxRate || 0.0825)`. That was a fifth copy
+   * of the pricing arithmetic, it fell back to a Texas tax rate for any business that
+   * had not set one, and it knew nothing about the discount — so a discounted quote
+   * displayed tax on the undiscounted amount and a total that disagreed with it.
+   *
+   * The server now stores `subtotal`, `discountAmount`, `taxAmount` and `totalAmount`
+   * on each tier, computed by the one pricing engine. The page's job is to render them.
+   */
   const displayItems = activeTier ? activeTier.items : estimate.items;
-  const displaySubtotal = activeTier ? activeTier.subtotal : estimate.subtotal;
-  const displayTax = activeTier
-    ? parseFloat((Math.max(0, activeTier.subtotal - (estimate.diagnosticFeeCredit || 0)) * (estimate.taxRate || 0.0825)).toFixed(2))
-    : estimate.taxAmount;
-  const displayTotal = activeTier ? activeTier.totalAmount : estimate.totalAmount;
+  // `?? 0` because a tier written before these fields existed carries neither, and a
+  // quote from last week must still render rather than crash on `undefined.toFixed`.
+  const displaySubtotal = (activeTier ? activeTier.subtotal : estimate.subtotal) ?? 0;
+  const displayDiscount = (activeTier ? activeTier.discountAmount : estimate.discountAmount) ?? 0;
+  const displayTax = (activeTier ? activeTier.taxAmount : estimate.taxAmount) ?? 0;
+  const displayTotal = (activeTier ? activeTier.totalAmount : estimate.totalAmount) ?? 0;
 
   return (
     <div className="min-h-screen bg-slate-100/70 text-slate-900 py-8 px-3 sm:px-6 font-sans antialiased">
@@ -449,6 +462,29 @@ export default function PublicQuotePortalPage() {
                 <div className="flex justify-between text-emerald-700 font-bold bg-emerald-50 p-2 rounded-xl border border-emerald-200">
                   <span>Diagnostic Fee Credit:</span>
                   <span className="font-mono">-${estimate.diagnosticFeeCredit.toFixed(2)}</span>
+                </div>
+              )}
+
+              {/*
+                The emergency callout and travel charges are not repeated here — they
+                appear as their own rows in the line-item table above. The discount is
+                the one figure that moves the total and has no line of its own.
+              */}
+              {displayDiscount > 0 && (
+                <div className="flex justify-between gap-3 text-emerald-700 font-bold bg-emerald-50 p-2 rounded-xl border border-emerald-200">
+                  <span>
+                    Discount
+                    {estimate.discountType === 'percentage' && estimate.discountValue
+                      ? ` (${estimate.discountValue}%)`
+                      : ''}
+                    :
+                    {estimate.discountReason ? (
+                      <span className="block font-medium text-[11px] text-emerald-800/80">
+                        {estimate.discountReason}
+                      </span>
+                    ) : null}
+                  </span>
+                  <span className="font-mono shrink-0">-${displayDiscount.toFixed(2)}</span>
                 </div>
               )}
 

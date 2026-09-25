@@ -58,6 +58,10 @@ export interface Appointment {
   status: AppointmentStatus;
   priority: AppointmentPriority;
   source: AppointmentSource;
+  /** Populated to `{ _id, name, phone }` by the list and detail endpoints. */
+  technicianId?: { _id: string; name: string; phone?: string } | string | null;
+  technicianName?: string;
+  address?: string;
   customerNotes?: string;
   internalNotes?: string;
   cancellationReason?: string;
@@ -76,6 +80,8 @@ export interface CreateAppointmentInput {
   source?: AppointmentSource;
   customerNotes?: string;
   internalNotes?: string;
+  /** Technician record id. Omit to leave the job unassigned. */
+  technicianId?: string;
 }
 
 export interface UpdateAppointmentInput {
@@ -85,6 +91,8 @@ export interface UpdateAppointmentInput {
   priority?: AppointmentPriority;
   customerNotes?: string;
   internalNotes?: string;
+  /** Pass `null` to unassign. */
+  technicianId?: string | null;
 }
 
 export interface AppointmentQuery {
@@ -97,6 +105,8 @@ export interface AppointmentQuery {
   to?: string;
   customerId?: string;
   serviceId?: string;
+  /** Filter the board to one technician. */
+  technicianId?: string;
 }
 
 export interface PaginatedAppointmentsResponse {

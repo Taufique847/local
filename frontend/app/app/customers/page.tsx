@@ -1,12 +1,14 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { DashboardShell } from '@/components/dashboard/dashboard-shell';
 import { CustomerService } from '@/services/customer.service';
 import { Customer, CustomerListQuery } from '@/types/customer';
 import { CustomerModal } from '@/components/customers/customer-modal';
+import { SegmentPanel } from '@/components/customers/segment-panel';
+import { CustomerFilter } from '@/services/segment.service';
 import { 
   Users, 
   Search, 
@@ -51,6 +53,17 @@ export default function CustomersPage() {
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
   const [propertyTypeFilter, setPropertyTypeFilter] = useState<'all' | 'residential' | 'commercial'>('all');
 
+  /**
+   * A saved segment's filter, applied on top of the dropdowns.
+   *
+   * Held separately rather than pushed into the individual controls, because a segment
+   * can express conditions the dropdowns cannot — a lifetime-value floor, an equipment
+   * brand, a tag exclusion. Flattening it into the controls would silently drop
+   * whichever parts have no widget.
+   */
+  const [segmentFilter, setSegmentFilter] = useState<CustomerFilter | null>(null);
+  const [activeSegmentName, setActiveSegmentName] = useState<string | null>(null);
+
   // Modal state
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
@@ -73,6 +86,9 @@ export default function CustomersPage() {
       const query: CustomerListQuery = {
         page: currentPage,
         limit,
+        // Segment conditions first, so the dropdowns below can still override the
+        // two fields they own.
+        ...(segmentFilter ?? {}),
       };
 
       if (searchTerm.trim()) {
@@ -96,11 +112,29 @@ export default function CustomersPage() {
     } finally {
       setLoading(false);
     }
-  }, [currentPage, limit, searchTerm, statusFilter, propertyTypeFilter]);
+  }, [currentPage, limit, searchTerm, statusFilter, propertyTypeFilter, segmentFilter]);
 
   useEffect(() => {
     fetchCustomers();
   }, [fetchCustomers]);
+
+  /**
+   * Tags in use, offered as suggestions in the segment builder.
+   *
+   * Derived from the loaded page rather than a dedicated endpoint, so it is honestly
+   * only the tags visible right now — enough to build a segment from what you can see,
+   * and not presented as the complete set. A distinct-tags endpoint is the proper fix
+   * and is not this.
+   */
+  const knownTags = useMemo(() => {
+    const seen: string[] = [];
+    for (const customer of customers) {
+      for (const tag of customer.tags ?? []) {
+        if (!seen.includes(tag)) seen.push(tag);
+      }
+    }
+    return seen.sort();
+  }, [customers]);
 
   const handleCreateCustomer = () => {
     setSelectedCustomer(null);
@@ -203,9 +237,11 @@ export default function CustomersPage() {
                 }}
                 className="h-9 px-3 rounded-md border border-slate-200 bg-white text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-slate-900"
               >
+                {/* 'Lead' was offered here and is not a Customer status — the
+                    enum is active | inactive. Selecting it filtered nothing.
+                    Leads are a separate record type, under /app/leads. */}
                 <option value="all">All Statuses</option>
                 <option value="active">Active</option>
-                <option value="lead">Lead</option>
                 <option value="inactive">Inactive</option>
               </select>
 
@@ -223,6 +259,40 @@ export default function CustomersPage() {
               </select>
             </div>
           </div>
+
+          {/* Shown whenever a segment narrows the list, so the count on screen is never
+              unexplained. */}
+          {activeSegmentName && (
+            <div className="flex items-center justify-between gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2">
+              <span className="text-xs text-blue-900">
+                Showing the <span className="font-semibold">{activeSegmentName}</span> segment
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setSegmentFilter(null);
+                  setActiveSegmentName(null);
+                  setCurrentPage(1);
+                }}
+                className="text-xs font-semibold text-blue-700 hover:text-blue-900"
+              >
+                Clear
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Saved segments. Below the filters because a segment is a saved filter, and
+            above the table because choosing one changes what the table shows. */}
+        <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+          <SegmentPanel
+            knownTags={knownTags}
+            onApplySegment={(segment) => {
+              setSegmentFilter(segment.filter);
+              setActiveSegmentName(segment.name);
+              setCurrentPage(1);
+            }}
+          />
         </div>
 
         {/* Customer Table / List */}
@@ -294,14 +364,23 @@ export default function CustomersPage() {
                               <p className="font-semibold text-slate-900">
                                 {cust.firstName} {cust.lastName}
                               </p>
+                              {/*
+                                A "Carrier 4T Split (410A)" / "Carrier 10T RTU"
+                                equipment badge used to render here, chosen purely
+                                from propertyType. It was invented — no equipment
+                                is recorded against a customer anywhere in the
+                                product — so every row asserted a specific unit the
+                                business had never entered.
+                              */}
                               <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
-                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-700 border border-slate-200/80">
-                                  <Wrench className="w-2.5 h-2.5 text-blue-600" />
-                                  {cust.propertyType === 'commercial' ? 'Carrier 10T RTU' : 'Carrier 4T Split (410A)'}
-                                </span>
                                 <span className="text-[10px] text-slate-400 font-normal">
-                                  • {new Date(cust.createdAt).toLocaleDateString()}
+                                  Added {new Date(cust.createdAt).toLocaleDateString()}
                                 </span>
+                                {cust.isOptedOut && (
+                                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-rose-50 text-rose-700 border border-rose-200">
+                                    Texts off
+                                  </span>
+                                )}
                               </div>
                             </div>
                           </div>
@@ -338,11 +417,17 @@ export default function CustomersPage() {
                           )}
                         </td>
 
-                        {/* Property Type */}
+                        {/* Property type. Was `|| 'Residential'`, which asserted
+                            residential for every customer because the field was
+                            never persisted. Now shows what was actually recorded. */}
                         <td className="py-3.5 px-4">
-                          <span className="capitalize text-slate-700 font-medium">
-                            {cust.propertyType || 'Residential'}
-                          </span>
+                          {cust.propertyType ? (
+                            <span className="capitalize text-slate-700 font-medium">
+                              {cust.propertyType}
+                            </span>
+                          ) : (
+                            <span className="text-slate-400">&mdash;</span>
+                          )}
                         </td>
 
                         {/* Status */}

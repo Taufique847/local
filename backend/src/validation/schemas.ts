@@ -108,6 +108,43 @@ export const lineItemSchema = z.object({
   unitPrice: z.coerce.number().min(0, 'Unit price cannot be negative').max(1_000_000),
 });
 
+/**
+ * A discount as entered by the owner.
+ *
+ * `value` is bounded here only loosely because its meaning depends on `type` —
+ * `PricingService` rejects a percentage above 100 and caps a fixed amount at the
+ * bill, which it can do because it is the only thing that knows the bill.
+ *
+ * `reason` is not required by this schema, but it is stored when given: a discount
+ * nobody can explain three months later is indistinguishable from a write-off.
+ */
+export const discountSchema = z.object({
+  type: z.enum(['percentage', 'fixed']),
+  value: z.coerce.number().min(0, 'Discount cannot be negative').max(1_000_000),
+  reason: trimmed(200).optional(),
+});
+
+/**
+ * `emergency` and `travelFee` are optional overrides, not the normal path.
+ *
+ * Left unset, the emergency fee follows the appointment's `priority` and the travel
+ * fee comes from the service zone matching the customer's ZIP. They are accepted here
+ * so an owner raising an invoice by hand can charge or waive either one.
+ */
+const jobFeeOverrides = {
+  /**
+   * Not `z.coerce.boolean()`. That coerces the *string* `"false"` — which is what a
+   * form posts — to `true`, so an owner explicitly waiving the emergency fee would
+   * have been charged it.
+   */
+  emergency: z
+    .union([z.boolean(), z.enum(['true', 'false']).transform((v) => v === 'true')])
+    .optional(),
+  emergencyFee: z.coerce.number().min(0).max(100_000).optional(),
+  travelFee: z.coerce.number().min(0).max(10_000).optional(),
+  discount: discountSchema.optional(),
+};
+
 export const createInvoiceSchema = z.object({
   customerId: objectId,
   appointmentId: objectId.optional(),
@@ -116,6 +153,7 @@ export const createInvoiceSchema = z.object({
   items: z.array(lineItemSchema).min(1, 'Add at least one line item'),
   diagnosticFeeCredit: z.coerce.number().min(0).max(100_000).optional(),
   taxRate: z.coerce.number().min(0).max(1).optional(),
+  ...jobFeeOverrides,
   dueDate: z.coerce.date().optional(),
   notes: trimmed(2000).optional(),
 });
@@ -144,6 +182,7 @@ export const createEstimateSchema = z.object({
   tiers: z.array(estimateTierSchema).max(3).optional(),
   diagnosticFeeCredit: z.coerce.number().min(0).max(100_000).optional(),
   taxRate: z.coerce.number().min(0).max(1).optional(),
+  ...jobFeeOverrides,
   terms: trimmed(4000).optional(),
 });
 
@@ -206,6 +245,14 @@ export const policySchema = z.object({
   emergencyKeywords: z.array(trimmed(60).min(2)).max(100),
   diagnosticFee: z.coerce.number().min(0).max(10_000),
   emergencyFee: z.coerce.number().min(0).max(10_000),
+  // A fraction (0.0825 = 8.25%), matching the model. Optional so an existing
+  // settings form that does not yet post it keeps working.
+  taxRate: z.coerce.number().min(0).max(1).optional(),
+  laborRate: z.coerce.number().min(0).max(10_000).optional(),
+  // Bounds mirror the model exactly. The upper bound also sizes the reminder
+  // job's candidate window (MAX_REMINDER_LEAD_HOURS), so the three must agree.
+  reminderLeadHours: z.coerce.number().min(1).max(168).optional(),
+  appointmentRemindersEnabled: z.boolean().optional(),
   requireDiagnosticBeforePricing: z.boolean().optional(),
   afterHoursDispatchEnabled: z.boolean().optional(),
   emergencyTransferPhone: usPhone.optional().or(z.literal('')),
@@ -245,6 +292,11 @@ export const serviceZoneSchema = z.object({
     .min(1, 'Add at least one ZIP code')
     .max(500),
   travelBufferMinutes: z.coerce.number().min(0).max(240).default(30),
+  /**
+   * Trip charge for jobs in this zone, in dollars. Bounds mirror the model.
+   * Defaults to 0 so a business that charges the same everywhere configures nothing.
+   */
+  travelFee: z.coerce.number().min(0).max(10_000).optional(),
   assignedTechnicianIds: z.array(objectId).max(200).optional(),
   active: z.boolean().optional(),
 });
@@ -289,6 +341,26 @@ const addressSchema = z.object({
   zip: trimmed(20).optional(),
 });
 
+/**
+ * Structured access and property facts on a customer.
+ *
+ * Every field allows an empty string, which the service reads as "clear this" —
+ * distinct from the field being absent, which means "not part of this request". A
+ * partial form post must not wipe fields it does not know about.
+ *
+ * Declared above `createCustomerSchema` because that schema references it, and a
+ * `const` referenced before its declaration is a temporal-dead-zone error at module
+ * load, not a compile error.
+ */
+export const customerPropertySchema = z.object({
+  gateCode: z.union([trimmed(40), z.literal('')]).optional(),
+  accessInstructions: z.union([trimmed(500), z.literal('')]).optional(),
+  hasPets: z.boolean().optional(),
+  petNotes: z.union([trimmed(300), z.literal('')]).optional(),
+  parkingNotes: z.union([trimmed(300), z.literal('')]).optional(),
+  propertyNotes: z.union([trimmed(500), z.literal('')]).optional(),
+});
+
 export const createCustomerSchema = z.object({
   // Max lengths mirror customer.model.ts so the schema rejects before Mongoose
   // does, with a field-level message instead of a raw validation dump.
@@ -302,6 +374,10 @@ export const createCustomerSchema = z.object({
   tags: z.array(trimmed(40)).max(20).optional(),
   status: z.enum(['active', 'inactive']).optional(),
   source: trimmed(60).optional(),
+  propertyType: z.enum(['residential', 'commercial']).optional(),
+  // Declared here or Zod strips it and Mongoose never sees it — the exact bug that
+  // made `propertyType` and `diagnosticFee` silently vanish on save.
+  property: customerPropertySchema.optional(),
 });
 
 /** Every field optional, but at least one must be present. */
@@ -333,22 +409,92 @@ export const updateLeadSchema = createLeadSchema
     message: 'Provide at least one field to update',
   });
 
-export const createAppointmentSchema = z.object({
-  customerId: objectId,
-  serviceId: objectId,
-  leadId: objectId.optional(),
-  // Coerced to a Date so an unparseable value is a 400 here rather than an
-  // `Invalid Date` reaching the conflict check.
-  startAt: z.coerce.date({ errorMap: () => ({ message: 'Enter a valid start date and time' }) }),
-  endAt: z.coerce.date().optional(),
-  description: trimmed(2000).optional(),
-  address: trimmed(300).optional(),
-  priority: z.enum(['low', 'medium', 'high', 'urgent']).optional(),
-  source: z.enum(['manual', 'ai_call', 'website', 'referral', 'other']).optional(),
-  technicianName: trimmed(120).optional(),
-  customerNotes: trimmed(2000).optional(),
-  internalNotes: trimmed(2000).optional(),
+/**
+ * A repeating schedule.
+ *
+ * Shape only. The cross-field rule — exactly one of `count` or `until` — lives in
+ * `RecurrenceService.normaliseRule`, because that is also the entry point the top-up job
+ * and any future importer go through, and a rule enforced only at the HTTP edge is a rule
+ * with a way around it.
+ */
+export const recurrenceRuleSchema = z.object({
+  frequency: z.enum(['weekly', 'monthly']),
+  interval: z.coerce.number().int().min(1).max(52).default(1),
+  /** Total visits including the first. */
+  count: z.coerce.number().int().min(2).max(260).optional(),
+  until: z.coerce.date().optional(),
 });
+
+export const createAppointmentSchema = z
+  .object({
+    customerId: objectId,
+    serviceId: objectId,
+    leadId: objectId.optional(),
+    recurrence: recurrenceRuleSchema.optional(),
+    // Coerced to a Date so an unparseable value is a 400 here rather than an
+    // `Invalid Date` reaching the conflict check.
+    startAt: z.coerce.date({ errorMap: () => ({ message: 'Enter a valid start date and time' }) }),
+    endAt: z.coerce.date().optional(),
+    description: trimmed(2000).optional(),
+    address: trimmed(300).optional(),
+    priority: z.enum(['low', 'medium', 'high', 'urgent']).optional(),
+    source: z.enum(['manual', 'ai_call', 'website', 'referral', 'other']).optional(),
+    // The real assignment. `technicianName` is derived from this when present.
+    technicianId: objectId.optional(),
+    technicianName: trimmed(120).optional(),
+    customerNotes: trimmed(2000).optional(),
+    internalNotes: trimmed(2000).optional(),
+  })
+  /**
+   * The same chronology check the reschedule schema carries.
+   *
+   * It was added there and not here, which is worse than never having it: the create path
+   * is the one the AI, the dashboard and the portal all use. An inverted window saves
+   * cleanly, because the overlap query for `startAt < endAt` and `endAt > startAt` matches
+   * nothing when the two are the wrong way round — so the appointment is invisible to every
+   * conflict check forever, and carries a negative duration that every later reschedule
+   * inherits.
+   */
+  .refine((data) => !data.endAt || data.endAt.getTime() > data.startAt.getTime(), {
+    message: 'The end time must be after the start time',
+    path: ['endAt'],
+  });
+
+/**
+ * PUT /api/appointments/:id
+ *
+ * This route had no schema at all, so it accepted any body and relied on the
+ * service to ignore unknown keys. `technicianId` in particular has to be
+ * validated as an id before it reaches a tenant-scoped lookup.
+ *
+ * `technicianId: null` is accepted and means "unassign".
+ */
+export const updateAppointmentSchema = z
+  .object({
+    description: trimmed(2000).optional(),
+    address: trimmed(300).optional(),
+    priority: z.enum(['low', 'medium', 'high', 'urgent']).optional(),
+    status: z
+      .enum([
+        'scheduled',
+        'confirmed',
+        'rescheduled',
+        'en_route',
+        'arrived',
+        'in_progress',
+        'completed',
+        'cancelled',
+        'no_show',
+      ])
+      .optional(),
+    technicianId: z.union([objectId, z.null()]).optional(),
+    technicianName: trimmed(120).optional(),
+    customerNotes: trimmed(2000).optional(),
+    internalNotes: trimmed(2000).optional(),
+  })
+  .refine((data) => Object.keys(data).length > 0, {
+    message: 'Provide at least one field to update',
+  });
 
 export const appointmentStatusSchema = z.object({
   status: z.enum([
@@ -365,6 +511,230 @@ export const appointmentStatusSchema = z.object({
   cancellationReason: trimmed(500).optional(),
 });
 
+/**
+ * POST /api/appointments/:id/reschedule
+ *
+ * This route had no schema either, and the note above about `PUT /:id` applied to it
+ * just as much. Two things it was letting through:
+ *
+ *  - **`endAt` earlier than `startAt`.** Nothing compared them, and the overlap query
+ *    for a backwards window matches nothing, so a negative-duration appointment saved
+ *    cleanly. It then has a `durationMs` that poisons every later reschedule, since the
+ *    duration is carried forward.
+ *  - **An unbounded `reason`**, which is appended to `rescheduleHistory` on every move
+ *    and so accumulates on the document forever.
+ *
+ * `changedBy` is deliberately absent: it comes from the authenticated user in the
+ * controller. Accepting it here would let a caller sign someone else's name to an
+ * entry in the audit trail.
+ */
+/**
+ * A required timestamp with one message covering both ways it can be wrong.
+ *
+ * Not `z.coerce.date({ message })`: coercion turns a missing value into an Invalid Date,
+ * which zod reports as `invalid_date`, and the constructor's message only reaches
+ * `invalid_type`. So an omitted field produced the literal string "Invalid date" — which
+ * is neither actionable nor something a form can put next to an input.
+ */
+const requiredTimestamp = (message: string) =>
+  z
+    .unknown()
+    /**
+     * `null` is singled out because `new Date(null)` is **1 January 1970**, not an
+     * invalid date — so it would pass the check below and silently move an appointment
+     * to the epoch. `undefined` and `''` need no special case: `new Date` already makes
+     * both invalid, and a second guard for them would be a clause nothing could reach.
+     */
+    .transform((value) => (value === null ? null : new Date(value as any)))
+    .refine((d): d is Date => d instanceof Date && !Number.isNaN(d.getTime()), { message });
+
+export const rescheduleAppointmentSchema = z
+  .object({
+    startAt: requiredTimestamp('A valid new start time is required to reschedule'),
+    endAt: z.coerce.date().optional(),
+    reason: trimmed(500).optional(),
+  })
+  .refine((data) => !data.endAt || data.endAt.getTime() > data.startAt.getTime(), {
+    message: 'The new end time must be after the new start time',
+    path: ['endAt'],
+  });
+
+/** POST /api/appointments/:id/cancel — also previously unvalidated. */
+export const cancelAppointmentSchema = z.object({
+  reason: trimmed(500).optional(),
+});
+
+/**
+ * POST /api/reschedule-requests/:id/apply
+ *
+ * `startAt` is required and must parse. The owner is picking a new time for a
+ * customer who asked to move, and an unparseable date reaching
+ * `rescheduleAppointment` would surface as a generic 400 with no indication of
+ * which field was wrong.
+ */
+/**
+ * A saved customer segment.
+ *
+ * `filter` is deliberately `unknown` here and narrowed by `sanitiseCustomerFilter` in
+ * the service. Declaring the filter's shape twice — once in Zod, once in the
+ * sanitiser that decides what may be persisted — would let the two drift, and the
+ * sanitiser is the one that matters because it guards what goes into the database.
+ */
+export const customerSegmentSchema = z.object({
+  name: trimmed(80).min(1, 'Give the segment a name'),
+  description: trimmed(300).optional(),
+  filter: z.record(z.string(), z.unknown()),
+});
+
+export const updateCustomerSegmentSchema = z
+  .object({
+    name: trimmed(80).min(1).optional(),
+    description: z.union([trimmed(300), z.literal('')]).optional(),
+    filter: z.record(z.string(), z.unknown()).optional(),
+  })
+  .refine((data) => Object.keys(data).length > 0, {
+    message: 'Provide at least one field to update',
+  });
+
+/**
+ * A campaign send.
+ *
+ * `body` is capped at the email ceiling; the service narrows it to 1600 for SMS and
+ * separately requires an opt-out notice on that channel.
+ */
+export const segmentCampaignSchema = z.object({
+  channel: z.enum(['sms', 'email']),
+  body: z.string().trim().min(1, 'Write the message you want to send').max(20_000),
+  subject: trimmed(200).optional(),
+  /** Returns the audience size without sending anything. */
+  dryRun: z.boolean().optional(),
+});
+
+/**
+ * Customer equipment.
+ *
+ * `type` is the only required field: a technician told "there is a Carrier unit
+ * somewhere" is better served by a row with a type and nothing else than by no row
+ * at all, and the rest fills in over time.
+ */
+const equipmentTypeEnum = z.enum([
+  'furnace',
+  'air_conditioner',
+  'heat_pump',
+  'mini_split',
+  'package_unit',
+  'boiler',
+  'air_handler',
+  'water_heater',
+  'thermostat',
+  'other',
+]);
+
+const equipmentLocationEnum = z.enum([
+  'attic',
+  'basement',
+  'crawl_space',
+  'garage',
+  'roof',
+  'closet',
+  'side_yard',
+  'utility_room',
+  'exterior',
+  'other',
+]);
+
+const equipmentFields = {
+  brand: trimmed(60).optional(),
+  modelNumber: trimmed(80).optional(),
+  serialNumber: trimmed(80).optional(),
+  // Upper bound left to the model, which compares against the current year rather
+  // than a literal that would go stale.
+  installYear: z.coerce.number().int().min(1950).max(2200).optional(),
+  filterSize: trimmed(40).optional(),
+  // Empty string clears it; the enum alone would reject ''.
+  location: z.union([equipmentLocationEnum, z.literal('')]).optional(),
+  locationNotes: trimmed(200).optional(),
+  warrantyExpiresAt: z
+    .union([
+      z.string().trim().refine((v) => !isNaN(new Date(v).getTime()), 'Not a valid date'),
+      z.literal(''),
+      z.null(),
+    ])
+    .optional(),
+  notes: trimmed(1000).optional(),
+  isPrimary: z.boolean().optional(),
+  active: z.boolean().optional(),
+};
+
+export const createEquipmentSchema = z.object({
+  type: equipmentTypeEnum,
+  ...equipmentFields,
+});
+
+export const updateEquipmentSchema = z
+  .object({
+    type: equipmentTypeEnum.optional(),
+    ...equipmentFields,
+  })
+  .refine((data) => Object.keys(data).length > 0, {
+    message: 'Provide at least one field to update',
+  });
+
+/**
+ * PUT /api/message-templates
+ *
+ * `body` is allowed to be empty: that means "keep the standard wording but honour
+ * the on/off toggle", so an owner can switch a channel off without first having to
+ * retype the message. Placeholder names are validated in the service, which knows
+ * the allowed set per message type.
+ */
+export const messageTemplateSchema = z.object({
+  type: z.enum([
+    'appointment_confirmation',
+    'appointment_reminder',
+    'appointment_rescheduled',
+    'appointment_cancelled',
+    'missed_call_followup',
+    'lead_followup',
+    'estimate_sent',
+    'invoice_issued',
+    'payment_receipt',
+  ]),
+  channel: z.enum(['sms', 'email']),
+  enabled: z.boolean().optional(),
+  // 20000 is the email ceiling; the service narrows it to 1600 for SMS.
+  body: z.string().trim().max(20_000).optional(),
+  subject: trimmed(200).optional(),
+});
+
+export const messageTemplatePreviewSchema = z.object({
+  type: z.enum([
+    'appointment_confirmation',
+    'appointment_reminder',
+    'appointment_rescheduled',
+    'appointment_cancelled',
+    'missed_call_followup',
+    'lead_followup',
+    'estimate_sent',
+    'invoice_issued',
+    'payment_receipt',
+  ]),
+  body: z.string().trim().max(20_000).optional(),
+  subject: trimmed(200).optional(),
+});
+
+export const applyRescheduleRequestSchema = z.object({
+  startAt: z
+    .string()
+    .trim()
+    .refine((v) => !isNaN(new Date(v).getTime()), 'Provide a valid ISO date and time'),
+  endAt: z
+    .string()
+    .trim()
+    .refine((v) => !isNaN(new Date(v).getTime()), 'Provide a valid ISO date and time')
+    .optional(),
+});
+
 export const workerJobStatusSchema = z.object({
   status: z.enum([
     'scheduled',
@@ -379,4 +749,15 @@ export const workerJobStatusSchema = z.object({
   latitude: z.coerce.number().min(-90).max(90).optional(),
   longitude: z.coerce.number().min(-180).max(180).optional(),
   address: trimmed(300).optional(),
+});
+
+/**
+ * POST /api/appointments/:id/cancel-series
+ *
+ * `from` defaults to now in the service. Accepted so an owner can end a plan from a
+ * chosen date rather than only from today — "stop after the March visit".
+ */
+export const cancelSeriesSchema = z.object({
+  from: z.coerce.date().optional(),
+  reason: trimmed(500).optional(),
 });

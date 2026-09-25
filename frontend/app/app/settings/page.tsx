@@ -715,6 +715,57 @@ export default function SettingsPage() {
                       <span>90 Days</span>
                     </div>
                   </div>
+
+                  {/* Appointment reminder lead time.
+                      Exposed here because the reminder job reads this field: without
+                      a control the setting would exist and no owner could change it. */}
+                  <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Clock className="w-4 h-4 text-emerald-600" />
+                        <h4 className="text-xs font-bold text-slate-900">Appointment Reminder Lead Time</h4>
+                      </div>
+                      <span className="text-sm font-bold text-emerald-600">
+                        {policies.reminderLeadHours ?? 24} Hours
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-500">
+                      How far ahead of the appointment the customer gets their reminder by text and email.
+                      Reminders are held until 8:00 AM local time and never sent twice.
+                    </p>
+                    <input
+                      type="range"
+                      min={1}
+                      max={72}
+                      step={1}
+                      value={policies.reminderLeadHours ?? 24}
+                      aria-label="Appointment reminder lead time in hours"
+                      onChange={(e) =>
+                        setPolicies((p) => ({ ...p, reminderLeadHours: Number(e.target.value) }))
+                      }
+                      className="w-full accent-emerald-600 cursor-pointer"
+                      disabled={policies.appointmentRemindersEnabled === false}
+                    />
+                    <div className="flex justify-between text-[10px] text-slate-400">
+                      <span>1 Hour</span>
+                      <span>24 Hours</span>
+                      <span>72 Hours</span>
+                    </div>
+                    <label className="flex items-center gap-2 pt-1 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={policies.appointmentRemindersEnabled !== false}
+                        onChange={(e) =>
+                          setPolicies((p) => ({
+                            ...p,
+                            appointmentRemindersEnabled: e.target.checked,
+                          }))
+                        }
+                        className="accent-emerald-600 cursor-pointer"
+                      />
+                      <span className="text-xs text-slate-600">Send appointment reminders</span>
+                    </label>
+                  </div>
                 </div>
 
                 {/* Emergency Keywords Manager */}

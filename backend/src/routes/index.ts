@@ -25,6 +25,10 @@ import { portalRoutes } from './portal.routes';
 import demoRequestRoutes from './demo-request.routes';
 import dashboardRoutes from './dashboard.routes';
 import teamRoutes from './team.routes';
+import { rescheduleRequestRoutes } from './reschedule-request.routes';
+import { messageTemplateRoutes } from './message-template.routes';
+import { equipmentRoutes } from './equipment.routes';
+import { customerSegmentRoutes } from './customer-segment.routes';
 
 const apiRouter = Router();
 
@@ -36,13 +40,17 @@ apiRouter.use('/business', businessRoutes);
 apiRouter.use('/onboarding', onboardingRoutes);
 apiRouter.use('/dashboard', dashboardRoutes);
 apiRouter.use('/customers', customerRoutes);
+apiRouter.use('/equipment', equipmentRoutes);
+apiRouter.use('/segments', customerSegmentRoutes);
 apiRouter.use('/leads', leadRoutes);
 apiRouter.use('/services', serviceRoutes);
 apiRouter.use('/appointments', appointmentRoutes);
 apiRouter.use('/availability', availabilityRoutes);
+apiRouter.use('/reschedule-requests', rescheduleRequestRoutes);
 apiRouter.use('/phone-numbers', phoneNumberRoutes);
 apiRouter.use('/calls', callRoutes);
 apiRouter.use('/messages', communicationRoutes);
+apiRouter.use('/message-templates', messageTemplateRoutes);
 apiRouter.use('/knowledge', knowledgeRoutes);
 apiRouter.use('/policies', policyRoutes);
 apiRouter.use('/recovery', leadRecoveryRoutes);

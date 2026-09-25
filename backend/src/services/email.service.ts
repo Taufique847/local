@@ -10,6 +10,17 @@ export interface EmailMessage {
   /** Plain text body. Required — some clients and most spam filters want it. */
   text: string;
   html?: string;
+  /**
+   * Extra headers. Used for `List-Unsubscribe` and `List-Unsubscribe-Post` on
+   * campaign mail.
+   *
+   * Those two are not decoration: Gmail and Outlook render a native "Unsubscribe"
+   * button from them, and bulk senders without one get filtered. An unsubscribe link
+   * buried in the footer satisfies the law; the header is what makes it usable, and a
+   * recipient who cannot find the link marks the message as spam instead — which
+   * costs the sender's domain reputation far more than the lost contact.
+   */
+  headers?: Record<string, string>;
 }
 
 /**
@@ -64,6 +75,9 @@ export class EmailService {
           subject: message.subject,
           text: message.text,
           ...(message.html ? { html: message.html } : {}),
+          ...(message.headers && Object.keys(message.headers).length
+            ? { headers: message.headers }
+            : {}),
         }),
         signal: controller.signal,
       });

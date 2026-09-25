@@ -1,4 +1,10 @@
-import { Customer, CustomerInput, PaginatedCustomersResponse } from '../types/customer';
+import {
+  Customer,
+  CustomerInput,
+  Equipment,
+  EquipmentInput,
+  PaginatedCustomersResponse,
+} from '../types/customer';
 import { apiClient } from '../lib/api-client';
 
 export class CustomerService {
@@ -74,6 +80,55 @@ export class CustomerService {
     } catch {
       return [];
     }
+  }
+
+  /**
+   * Equipment on the customer's property.
+   *
+   * Retired units are excluded by default but reachable, because a replaced unit is
+   * exactly what a technician wants to see when the new one fails.
+   */
+  public static async getEquipment(
+    customerId: string,
+    options: { includeInactive?: boolean } = {}
+  ): Promise<Equipment[]> {
+    const query = options.includeInactive ? '?includeInactive=true' : '';
+    const json = await apiClient.get<{ equipment?: Equipment[] }>(
+      `/api/customers/${customerId}/equipment${query}`
+    );
+    return json.equipment ?? [];
+  }
+
+  public static async createEquipment(
+    customerId: string,
+    input: EquipmentInput
+  ): Promise<Equipment> {
+    const json = await apiClient.post<{ equipment: Equipment }>(
+      `/api/customers/${customerId}/equipment`,
+      input
+    );
+    return json.equipment;
+  }
+
+  public static async updateEquipment(
+    equipmentId: string,
+    input: Partial<EquipmentInput>
+  ): Promise<Equipment> {
+    const json = await apiClient.put<{ equipment: Equipment }>(
+      `/api/equipment/${equipmentId}`,
+      input
+    );
+    return json.equipment;
+  }
+
+  /** Marks a unit as no longer installed. Keeps it on file. */
+  public static async retireEquipment(equipmentId: string): Promise<void> {
+    await apiClient.post<{ success: boolean }>(`/api/equipment/${equipmentId}/retire`, {});
+  }
+
+  /** Hard delete, for a row created in error. */
+  public static async deleteEquipment(equipmentId: string): Promise<void> {
+    await apiClient.delete<{ success: boolean }>(`/api/equipment/${equipmentId}`);
   }
 
   /**

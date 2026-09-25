@@ -34,6 +34,19 @@ export interface IEstimateTier {
   description: string;
   items: IEstimateItem[];
   subtotal: number;
+  /**
+   * The dollars taken off this tier, and the tax charged on it.
+   *
+   * Only these three figures vary between tiers — the diagnostic credit, the
+   * emergency and travel fees and the tax *rate* belong to the job, not to the
+   * option the customer picks. They are stored because `approveEstimate` copies the
+   * chosen tier onto the estimate, and it previously copied `subtotal` and
+   * `totalAmount` while leaving `taxAmount` at the base items' value. The resulting
+   * estimate, and the invoice converted from it, failed its own
+   * `total === taxable + tax` check.
+   */
+  discountAmount: number;
+  taxAmount: number;
   totalAmount: number;
   isRecommended?: boolean;
 }
@@ -51,6 +64,15 @@ export interface IEstimate extends Document {
   selectedTierId?: 'good' | 'better' | 'best';
   subtotal: number;
   diagnosticFeeCredit: number;
+  /** Emergency/after-hours callout charge. 0 when not an emergency job. */
+  emergencyFee: number;
+  /** Trip charge from the service zone matching the job zip. 0 when none applies. */
+  travelFee: number;
+  discountType?: 'percentage' | 'fixed';
+  discountValue: number;
+  discountAmount: number;
+  /** Why the discount was given. A discount nobody can explain later is a write-off. */
+  discountReason?: string;
   taxRate: number;
   taxAmount: number;
   totalAmount: number;
@@ -95,6 +117,8 @@ const estimateTierSchema = new Schema<IEstimateTier>(
     description: { type: String },
     items: { type: [estimateItemSchema], default: [] },
     subtotal: { type: Number, default: 0 },
+    discountAmount: { type: Number, default: 0 },
+    taxAmount: { type: Number, default: 0 },
     totalAmount: { type: Number, default: 0 },
     isRecommended: { type: Boolean, default: false },
   },
@@ -162,6 +186,38 @@ const estimateSchema = new Schema<IEstimate>(
     diagnosticFeeCredit: {
       type: Number,
       default: 0,
+    },
+    /**
+     * Emergency and travel fees are stored alongside the line items that represent
+     * them, not instead of them. The line item is what the customer reads; these
+     * fields are what a report can sum without parsing descriptions.
+     */
+    emergencyFee: {
+      type: Number,
+      default: 0,
+    },
+    travelFee: {
+      type: Number,
+      default: 0,
+    },
+    discountType: {
+      type: String,
+      enum: ['percentage', 'fixed'],
+    },
+    /** The percentage or dollar figure as entered, kept for the audit trail. */
+    discountValue: {
+      type: Number,
+      default: 0,
+    },
+    /** The dollars actually taken off, after the percentage is applied or the cap hit. */
+    discountAmount: {
+      type: Number,
+      default: 0,
+    },
+    discountReason: {
+      type: String,
+      trim: true,
+      maxlength: 200,
     },
     taxRate: {
       type: Number,

@@ -5,6 +5,7 @@ import { Appointment, AppointmentPriority, AppointmentSource, TimeSlot } from '@
 import { AppointmentService } from '@/services/appointment.service';
 import { CustomerService } from '@/services/customer.service';
 import { ServiceService } from '@/services/service.service';
+import { WorkerService } from '@/services/worker.service';
 import { Customer } from '@/types/customer';
 import { Service } from '@/types/service';
 import { Button } from '@/components/ui/button';
@@ -41,6 +42,7 @@ export function AppointmentModal({
 
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [services, setServices] = useState<Service[]>([]);
+  const [technicians, setTechnicians] = useState<Array<{ _id: string; name: string }>>([]);
   const [loadingPrereqs, setLoadingPrereqs] = useState(false);
 
   const [customerId, setCustomerId] = useState('');
@@ -54,6 +56,14 @@ export function AppointmentModal({
   const [description, setDescription] = useState('');
   const [customerNotes, setCustomerNotes] = useState('');
   const [internalNotes, setInternalNotes] = useState('');
+  /**
+   * Assignment. Empty string means unassigned.
+   *
+   * There was no field for this at all — the only nearby input was a free-text
+   * "Technician Notes" textarea — so `technicianId` was never sent and every job
+   * was created unassigned.
+   */
+  const [technicianId, setTechnicianId] = useState('');
 
   const [slots, setSlots] = useState<TimeSlot[]>([]);
   const [loadingSlots, setLoadingSlots] = useState(false);
@@ -67,12 +77,18 @@ export function AppointmentModal({
     const loadPrereqs = async () => {
       setLoadingPrereqs(true);
       try {
-        const [custData, srvData] = await Promise.all([
+        // Settled for the roster: a business with no technicians yet must still be
+        // able to book, so an empty or failing roster cannot block the form.
+        const [custData, srvData, techResult] = await Promise.all([
           CustomerService.getCustomers({ limit: 100 }),
           ServiceService.getServices({ limit: 100, status: 'active' }),
+          WorkerService.getTechnicians().catch(() => [] as any[]),
         ]);
         setCustomers(custData.customers || []);
         setServices(srvData.services || []);
+        setTechnicians(
+          (techResult || []).map((t: any) => ({ _id: t._id, name: t.name }))
+        );
 
         if (appointment) {
           const custId =
@@ -94,6 +110,13 @@ export function AppointmentModal({
           setDescription(appointment.description || '');
           setCustomerNotes(appointment.customerNotes || '');
           setInternalNotes(appointment.internalNotes || '');
+
+          const assigned = (appointment as any).technicianId;
+          setTechnicianId(
+            typeof assigned === 'object' && assigned
+              ? assigned._id || assigned.id || ''
+              : assigned || ''
+          );
         } else {
           // Defaults for new appointment
           if (custData.customers?.length > 0 && !customerId) {
@@ -167,6 +190,8 @@ export function AppointmentModal({
             description,
             customerNotes,
             internalNotes,
+            // null unassigns; the server refuses an id from another business.
+            technicianId: technicianId || null,
           }
         );
         onSaved(updated);
@@ -180,6 +205,7 @@ export function AppointmentModal({
           description,
           customerNotes,
           internalNotes,
+          ...(technicianId ? { technicianId } : {}),
         });
         onSaved(created);
       }
@@ -392,6 +418,44 @@ export function AppointmentModal({
                     <option value="other">Other</option>
                   </select>
                 </div>
+              </div>
+
+              {/* Technician assignment */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center gap-1.5">
+                  <Tag className="w-3.5 h-3.5 text-blue-600" />
+                  Assigned Technician
+                </label>
+                {technicians.length === 0 ? (
+                  <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl p-3 leading-relaxed">
+                    No technician records yet. Add them under Settings → Service Zones &amp; Tech
+                    Routing. Until a job is assigned, it shows on every technician&apos;s board.
+                  </p>
+                ) : (
+                  <>
+                    <select
+                      value={technicianId}
+                      onChange={(e) => setTechnicianId(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs sm:text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                    >
+                      <option value="">Unassigned</option>
+                      {technicians.map((t) => (
+                        <option key={t._id} value={t._id}>
+                          {t.name}
+                        </option>
+                      ))}
+                    </select>
+                    {/*
+                      Stated plainly because it is the behaviour that made the
+                      per-technician scoping look broken: an unassigned job is
+                      visible to everyone by design, so it can be picked up.
+                    */}
+                    <p className="mt-1 text-[11px] text-slate-400 leading-relaxed">
+                      An assigned job appears only on that technician&apos;s schedule.
+                      Unassigned jobs stay visible to the whole team.
+                    </p>
+                  </>
+                )}
               </div>
 
               {/* Notes */}

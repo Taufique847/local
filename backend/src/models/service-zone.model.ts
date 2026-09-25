@@ -6,6 +6,8 @@ export interface IServiceZone extends Document {
   zipCodes: string[];
   assignedTechnicianIds: Types.ObjectId[];
   travelBufferMinutes: number;
+  /** Trip charge for this zone, in dollars. 0 means no travel charge. */
+  travelFee: number;
   active: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -40,6 +42,18 @@ const ServiceZoneSchema = new Schema<IServiceZone>(
       default: 30,
       min: 0,
       max: 180,
+    },
+    /**
+     * Trip charge for jobs in this zone, in dollars.
+     *
+     * Defaults to 0, so an existing zone bills exactly as it did before this field
+     * existed. A business that charges the same everywhere leaves them all at zero.
+     */
+    travelFee: {
+      type: Number,
+      default: 0,
+      min: 0,
+      max: 10000,
     },
     active: {
       type: Boolean,
