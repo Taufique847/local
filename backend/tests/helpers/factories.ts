@@ -170,7 +170,8 @@ export const createStaff = async (
 
 export const createTechnicianRecord = (
   businessId: string | Types.ObjectId,
-  name = 'Tech Person'
+  name = 'Tech Person',
+  overrides: Record<string, any> = {}
 ) =>
   Technician.create({
     businessId,
@@ -179,9 +180,13 @@ export const createTechnicianRecord = (
     skills: ['ac_repair'],
     status: 'available',
     active: true,
+    ...overrides,
   });
 
-export const createCustomerRecord = (businessId: string | Types.ObjectId) =>
+export const createCustomerRecord = (
+  businessId: string | Types.ObjectId,
+  overrides: Record<string, any> = {}
+) =>
   Customer.create({
     businessId,
     // The model stores first and last name separately; there is no `name` field.
@@ -190,7 +195,9 @@ export const createCustomerRecord = (businessId: string | Types.ObjectId) =>
     phone: '+15552223333',
     email: 'homeowner@example.com',
     address: { street: '1 Test St', city: 'Testville', state: 'TX', zip: '75001' },
+    ...overrides,
   });
+
 
 export const createServiceRecord = (businessId: string | Types.ObjectId) =>
   Service.create({
