@@ -8,7 +8,7 @@ import { Technician } from '../models/technician.model';
 import { AvailabilityService } from './availability.service';
 import { NotificationService } from './notification.service';
 import { LockService, LockAcquisitionError } from './lock.service';
-import { zonedDayBounds, zonedDateKey, formatDateTimeInZone } from '../utils/format';
+import { zonedDayBounds, zonedDateKey, formatDateTimeInZone, escapeRegex } from '../utils/format';
 import {
   CreateAppointmentInput,
   UpdateAppointmentInput,
@@ -613,7 +613,7 @@ export class AppointmentService {
     if (filter.technicianId && Types.ObjectId.isValid(filter.technicianId)) {
       query.technicianId = filter.technicianId;
     } else if (filter.technicianName) {
-      query.technicianName = new RegExp(filter.technicianName, 'i');
+      query.technicianName = new RegExp(escapeRegex(filter.technicianName), 'i');
     }
 
     /**
@@ -737,6 +737,38 @@ export class AppointmentService {
         input.technicianId,
         input.technicianName
       );
+
+      /**
+       * Reassignment re-checks the new technician's diary, which it never did.
+       *
+       * The conflict check ran on create and on reschedule and not here, so the one
+       * operation that *changes who does the work* was the one that never asked whether
+       * they were free. Moving a job onto an already-booked technician through
+       * `PUT /api/appointments/:id` simply succeeded — and it is the path the booking
+       * modal's edit mode uses, so this was reachable from the UI.
+       *
+       * Only when the assignment actually changes: re-saving a form without touching the
+       * picker must not fail because the job conflicts with itself.
+       */
+      const nextId = assignment?.technicianId ?? null;
+      const currentId = appointment.technicianId ?? null;
+
+      if (nextId && nextId.toString() !== currentId?.toString()) {
+        const conflict = await AvailabilityService.checkSlotConflictDetailed(
+          businessId,
+          appointment.startAt,
+          appointment.endAt,
+          { excludeAppointmentId: appointment._id, technicianId: nextId }
+        );
+
+        if (conflict.conflict) {
+          throw new AppError(
+            conflict.reason || 'That technician is already booked for this time.',
+            409
+          );
+        }
+      }
+
       appointment.technicianId = (assignment?.technicianId ?? undefined) as any;
       appointment.technicianName = assignment?.technicianName;
     } else if (input.technicianName !== undefined) {

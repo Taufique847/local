@@ -69,6 +69,7 @@ const makeCustomer = async (
     lastName: `Number${phoneCounter}`,
     phone: `+1555000${String(1000 + phoneCounter)}`,
     email: `cust${phoneCounter}@example.com`,
+    marketingConsentGiven: true,
     ...overrides,
   });
 };
@@ -810,6 +811,7 @@ describe('campaigns', () => {
         lastName: `Person${i}`,
         phone: `+1555${String(100000 + i)}`,
         tags: ['BULK'],
+        marketingConsentGiven: true,
       }))
     );
 

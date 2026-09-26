@@ -170,6 +170,23 @@ export class WorkerService {
     },
     scope: { technicianId?: string | null } = {}
   ) {
+    if (data.photos) {
+      if (data.photos.length > 12) {
+        throw new AppError('Maximum 12 photos allowed per appointment.', 400);
+      }
+      const totalPhotosSize = data.photos.reduce(
+        (sum, photo) => sum + (photo.url ? photo.url.length : 0),
+        0
+      );
+      // Hard payload ceiling: 6MB across all photos to prevent MongoDB BSONObjectTooLarge (16MB limit)
+      if (totalPhotosSize > 6_000_000) {
+        throw new AppError(
+          'Total photo payload exceeds the 6MB limit to prevent database corruption. Please upload compressed images.',
+          400
+        );
+      }
+    }
+
     const apt = await this.findOwnedAppointment(businessId, appointmentId, false, scope);
 
     if (data.checklist) (apt as any).checklist = data.checklist;
@@ -177,9 +194,11 @@ export class WorkerService {
     if (data.partsUsed) (apt as any).partsUsed = data.partsUsed;
     if (data.internalNotes) (apt as any).internalNotes = data.internalNotes;
 
+
     await apt.save();
     return apt;
   }
+
 
   // 1-Tap Job Complete & Invoice Generation
   public static async completeJobAndGenerateInvoice(
@@ -285,23 +304,25 @@ export class WorkerService {
       });
     }
 
-    // Add parts used
+    // Add parts used (taxable tangible goods)
     if ((apt as any).partsUsed && (apt as any).partsUsed.length > 0) {
       for (const part of (apt as any).partsUsed) {
         items.push({
           description: `Part: ${part.partName}`,
           quantity: part.quantity,
           unitPrice: part.unitCost,
+          taxable: true,
         });
       }
     }
 
-    // Add extra labor if any
+    // Add extra labor if any (strictly tax-exempt residential service labor under US state tax laws)
     if (data.additionalLaborHours && data.additionalLaborHours > 0) {
       items.push({
         description: `Field Technician Labor (${data.additionalLaborHours} hrs)`,
         quantity: data.additionalLaborHours,
         unitPrice: data.laborRate ?? policy.laborRate,
+        taxable: false,
       });
     }
 
@@ -336,7 +357,7 @@ export class WorkerService {
 
     const invoice = await Invoice.create({
       businessId: apt.businessId,
-      customerId: apt.customerId,
+      customerId: (apt.customerId as any)?._id || apt.customerId,
       appointmentId: apt._id,
       invoiceNumber,
       title: `${apt.title || 'HVAC Service'} - Completed Field Work Order`,

@@ -9,6 +9,7 @@ import { NotificationService } from './notification.service';
 import { PricingService, PricingDiscount } from './pricing.service';
 import { AppError } from '../types';
 import { generateShareToken, isValidShareTokenFormat } from '../utils/share-token';
+import { escapeRegex } from '../utils/format';
 
 export class EstimateService {
   public static async createEstimate(
@@ -146,7 +147,7 @@ export class EstimateService {
     }
 
     if (filter.search) {
-      const regex = new RegExp(filter.search.trim(), 'i');
+      const regex = new RegExp(escapeRegex(filter.search.trim()), 'i');
       query.$or = [{ estimateNumber: regex }, { title: regex }];
     }
 

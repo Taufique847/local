@@ -3,6 +3,7 @@ import { CustomerController } from '../controllers/customer.controller';
 import { Customer360Controller } from '../controllers/customer-360.controller';
 import { AgentMemoryController } from '../controllers/agent-memory.controller';
 import { authMiddleware } from '../middleware/auth.middleware';
+import { attachBusinessContext, requireOwner, requireDispatchAccess } from '../middleware/business-role';
 import { validateBody } from '../middleware/validate';
 import { EquipmentController } from '../controllers/equipment.controller';
 import {
@@ -13,22 +14,25 @@ import {
 
 const router = Router();
 
-// All customer routes require authentication
+// All customer routes require authentication and workspace dispatch access (owner or dispatcher)
+// Technicians use the scoped worker endpoints (/api/worker) and cannot dump the entire customer database.
 router.use(authMiddleware as any);
+router.use(attachBusinessContext as any);
+router.use(requireDispatchAccess as any);
 
 router.get('/', CustomerController.getCustomers as any);
 router.get('/stats', CustomerController.getCustomerStats as any);
 router.get('/:id/360', Customer360Controller.getCustomer360 as any);
 router.put('/:id/tags', Customer360Controller.updateTags as any);
 
+
 /**
  * Erases a customer's personal data on request.
  *
- * Not a DELETE on the customer: appointments and invoices reference the record
- * and financial history has to survive, so identifying fields are scrubbed while
- * amounts and dates remain. Irreversible.
+ * Restricted to business owners (requireOwner) to comply with CCPA / GDPR data erasure
+ * procedures and prevent unauthorized or accidental loss of compliance records.
  */
-router.post('/:id/erase', CustomerController.erasePersonalData as any);
+router.post('/:id/erase', requireOwner, CustomerController.erasePersonalData as any);
 
 /**
  * Re-subscribes a customer to marketing email.

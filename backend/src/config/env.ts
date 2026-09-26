@@ -77,6 +77,7 @@ export interface AppConfig {
   twilioAuthToken?: string;
   twilioPhoneNumber?: string;
   twilioWebhookBaseUrl?: string;
+  twilioMessagingServiceSid?: string;
   /**
    * Explicit, opt-in escape hatch that skips Twilio/Stripe webhook signature
    * checks for local testing. Previously this was implied by
@@ -149,6 +150,10 @@ export interface AppConfig {
    */
   voiceStreamTokenTtlSeconds: number;
   enableScheduler: boolean;
+  geocoding: {
+    provider: string;
+    googleMapsApiKey?: string;
+  };
 }
 
 const parseNumber = (val: string | undefined, fallback: number): number => {
@@ -197,6 +202,7 @@ export const config: AppConfig = {
   twilioAuthToken: process.env.TWILIO_AUTH_TOKEN,
   twilioPhoneNumber: process.env.TWILIO_PHONE_NUMBER,
   twilioWebhookBaseUrl: process.env.TWILIO_WEBHOOK_BASE_URL || 'http://localhost:5000',
+  twilioMessagingServiceSid: process.env.TWILIO_MESSAGING_SERVICE_SID,
   allowInsecureWebhooks: !isProduction && parseBool(process.env.ALLOW_INSECURE_WEBHOOKS, false),
   stripeSecretKey: process.env.STRIPE_SECRET_KEY,
   stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET,
@@ -248,6 +254,10 @@ export const config: AppConfig = {
   maxCallDurationSeconds: parseNumber(process.env.MAX_CALL_DURATION_SECONDS, 600),
   voiceStreamTokenTtlSeconds: parseNumber(process.env.VOICE_STREAM_TOKEN_TTL_SECONDS, 120),
   enableScheduler: parseBool(process.env.ENABLE_SCHEDULER, true),
+  geocoding: {
+    provider: (process.env.GEOCODING_PROVIDER || 'nominatim').trim().toLowerCase(),
+    googleMapsApiKey: process.env.GOOGLE_MAPS_API_KEY || process.env.MAPS_API_KEY,
+  },
 };
 
 /**

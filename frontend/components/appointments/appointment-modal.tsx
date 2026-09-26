@@ -6,6 +6,7 @@ import { AppointmentService } from '@/services/appointment.service';
 import { CustomerService } from '@/services/customer.service';
 import { ServiceService } from '@/services/service.service';
 import { WorkerService } from '@/services/worker.service';
+import { DispatchService, type TechnicianMatch } from '@/services/operations.service';
 import { Customer } from '@/types/customer';
 import { Service } from '@/types/service';
 import { Button } from '@/components/ui/button';
@@ -21,6 +22,8 @@ import {
   FileText,
   Tag,
   CheckCircle2,
+  Sparkles,
+  Repeat,
 } from 'lucide-react';
 
 interface AppointmentModalProps {
@@ -65,10 +68,31 @@ export function AppointmentModal({
    */
   const [technicianId, setTechnicianId] = useState('');
 
+  /**
+   * The suggestion, which is offered and never applied on its own.
+   *
+   * `findOptimalTechnician` has existed since the beginning behind
+   * `POST /api/dispatch/match-tech` with no caller in the product, so its answer reached
+   * nobody. Wiring it to a button rather than to the picker's default is deliberate: a
+   * dispatcher knows things the matcher does not — who is training whom, whose van has the
+   * part — and silently pre-filling an assignment makes it look like a decision somebody
+   * made.
+   */
+  const [match, setMatch] = useState<TechnicianMatch | null>(null);
+  const [matching, setMatching] = useState(false);
+
   const [slots, setSlots] = useState<TimeSlot[]>([]);
   const [loadingSlots, setLoadingSlots] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Recurrence controls
+  const [isRecurring, setIsRecurring] = useState(false);
+  const [recurrenceFreq, setRecurrenceFreq] = useState<'weekly' | 'monthly'>('monthly');
+  const [recurrenceInterval, setRecurrenceInterval] = useState(1);
+  const [recurrenceEndMode, setRecurrenceEndMode] = useState<'count' | 'until'>('count');
+  const [recurrenceCount, setRecurrenceCount] = useState(4);
+  const [recurrenceUntil, setRecurrenceUntil] = useState('');
 
   // Load customers and services on modal open
   useEffect(() => {
@@ -196,6 +220,17 @@ export function AppointmentModal({
         );
         onSaved(updated);
       } else {
+        const recurrence =
+          !isEditing && isRecurring
+            ? {
+                frequency: recurrenceFreq,
+                interval: Math.max(1, Math.min(52, Number(recurrenceInterval) || 1)),
+                ...(recurrenceEndMode === 'count'
+                  ? { count: Math.max(2, Math.min(260, Number(recurrenceCount) || 4)) }
+                  : { until: recurrenceUntil || undefined }),
+              }
+            : undefined;
+
         const created = await AppointmentService.createAppointment({
           customerId,
           serviceId,
@@ -206,6 +241,7 @@ export function AppointmentModal({
           customerNotes,
           internalNotes,
           ...(technicianId ? { technicianId } : {}),
+          ...(recurrence ? { recurrence } : {}),
         });
         onSaved(created);
       }
@@ -216,6 +252,37 @@ export function AppointmentModal({
       setSaving(false);
     }
   };
+
+  /**
+   * Asks the server who should take this job.
+   *
+   * `customerId` and `serviceId` go up rather than a ZIP and a skill tag, so the server
+   * derives both from the same records the travel fee and the dispatch alert read. The
+   * chosen slot goes up as `startAt`, which is what lets anyone already booked be ruled
+   * out — the endpoint's one previous caller omitted it, so the availability half of the
+   * matcher never ran in production.
+   */
+  const handleSuggest = async () => {
+    setMatching(true);
+    setMatch(null);
+    try {
+      const result = await DispatchService.suggestTechnician({
+        customerId: customerId || undefined,
+        serviceId: serviceId || undefined,
+        startAt: selectedSlot || undefined,
+      });
+      setMatch(result);
+    } catch (err: any) {
+      setError(err.message || 'Could not work out a suggestion');
+    } finally {
+      setMatching(false);
+    }
+  };
+
+  /** Clears a stale suggestion whenever the inputs it was based on change. */
+  useEffect(() => {
+    setMatch(null);
+  }, [customerId, serviceId, selectedSlot]);
 
   const formatSlotTime = (isoString: string) => {
     try {
@@ -420,12 +487,141 @@ export function AppointmentModal({
                 </div>
               </div>
 
+              {/* Recurrence Schedule (Series / Maintenance Plan) */}
+              {!isEditing && (
+                <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3.5 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <label className="flex items-center gap-2 cursor-pointer select-none text-xs font-bold text-slate-800">
+                      <input
+                        type="checkbox"
+                        checked={isRecurring}
+                        onChange={(e) => setIsRecurring(e.target.checked)}
+                        className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 h-4 w-4"
+                      />
+                      <Repeat className="w-3.5 h-3.5 text-blue-600" />
+                      Recurring Schedule / Maintenance Plan
+                    </label>
+                    {isRecurring && (
+                      <span className="text-[11px] font-semibold text-blue-700 bg-blue-100/70 px-2 py-0.5 rounded-full">
+                        Generates Series
+                      </span>
+                    )}
+                  </div>
+
+                  {isRecurring && (
+                    <div className="pt-2 border-t border-slate-200/80 space-y-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                            Frequency
+                          </label>
+                          <select
+                            value={recurrenceFreq}
+                            onChange={(e) => setRecurrenceFreq(e.target.value as any)}
+                            className="w-full bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                          >
+                            <option value="weekly">Weekly</option>
+                            <option value="monthly">Monthly</option>
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                            Interval (Every X {recurrenceFreq === 'weekly' ? 'weeks' : 'months'})
+                          </label>
+                          <input
+                            type="number"
+                            min={1}
+                            max={52}
+                            value={recurrenceInterval}
+                            onChange={(e) => setRecurrenceInterval(Math.max(1, parseInt(e.target.value) || 1))}
+                            className="w-full bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-end">
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                            End Condition
+                          </label>
+                          <select
+                            value={recurrenceEndMode}
+                            onChange={(e) => setRecurrenceEndMode(e.target.value as any)}
+                            className="w-full bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                          >
+                            <option value="count">After number of visits</option>
+                            <option value="until">On a specific end date</option>
+                          </select>
+                        </div>
+
+                        <div>
+                          {recurrenceEndMode === 'count' ? (
+                            <div>
+                              <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                                Total Visits (Including first)
+                              </label>
+                              <input
+                                type="number"
+                                min={2}
+                                max={260}
+                                value={recurrenceCount}
+                                onChange={(e) => setRecurrenceCount(Math.max(2, parseInt(e.target.value) || 2))}
+                                className="w-full bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                              />
+                            </div>
+                          ) : (
+                            <div>
+                              <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                                End Date
+                              </label>
+                              <input
+                                type="date"
+                                value={recurrenceUntil}
+                                onChange={(e) => setRecurrenceUntil(e.target.value)}
+                                className="w-full bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                              />
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      <p className="text-[10px] text-slate-500">
+                        Occurrences are automatically generated up to the 120-day horizon and kept filled by the background scheduler.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Technician assignment */}
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center gap-1.5">
-                  <Tag className="w-3.5 h-3.5 text-blue-600" />
-                  Assigned Technician
-                </label>
+                <div className="flex items-center justify-between mb-1.5 gap-2">
+                  <label className="block text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                    <Tag className="w-3.5 h-3.5 text-blue-600" />
+                    Assigned Technician
+                  </label>
+                  {technicians.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleSuggest}
+                      disabled={matching || !selectedSlot}
+                      title={
+                        selectedSlot
+                          ? 'Work out who is free and closest'
+                          : 'Pick a time slot first — without one, nobody can be ruled out as busy'
+                      }
+                      className="inline-flex items-center gap-1.5 text-[11px] font-bold text-blue-700 hover:text-blue-900 disabled:text-slate-400 disabled:cursor-not-allowed"
+                    >
+                      {matching ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Sparkles className="w-3.5 h-3.5" />
+                      )}
+                      Suggest
+                    </button>
+                  )}
+                </div>
+
                 {technicians.length === 0 ? (
                   <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl p-3 leading-relaxed">
                     No technician records yet. Add them under Settings → Service Zones &amp; Tech
@@ -439,12 +635,61 @@ export function AppointmentModal({
                       className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs sm:text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                     >
                       <option value="">Unassigned</option>
-                      {technicians.map((t) => (
-                        <option key={t._id} value={t._id}>
-                          {t.name}
-                        </option>
-                      ))}
+                      {technicians.map((t) => {
+                        // Marked, not removed: a dispatcher may still deliberately
+                        // double-book someone, and the booking path is what refuses it.
+                        const candidate = match?.candidates.find(
+                          (c) => c.technicianId === t._id
+                        );
+                        return (
+                          <option key={t._id} value={t._id}>
+                            {t.name}
+                            {candidate?.busy ? ' — already booked then' : ''}
+                          </option>
+                        );
+                      })}
                     </select>
+
+                    {/*
+                      The suggestion, with its reasoning and a button to accept it.
+
+                      Shown rather than applied: "suggest, do not impose" is only meaningful
+                      if the reason is visible and the dispatcher has to agree.
+                    */}
+                    {match && (
+                      <div className="mt-2 rounded-xl border border-blue-200 bg-blue-50/70 p-2.5 space-y-1.5">
+                        {match.suggested ? (
+                          <>
+                            <div className="flex items-start justify-between gap-2">
+                              <span className="text-xs font-bold text-blue-900">
+                                Suggested: {match.suggested.name}
+                              </span>
+                              {technicianId === match.suggested.technicianId ? (
+                                <span className="text-[11px] font-bold text-emerald-700 shrink-0">
+                                  Selected
+                                </span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => setTechnicianId(match.suggested!.technicianId)}
+                                  className="text-[11px] font-bold text-blue-700 hover:text-blue-900 shrink-0"
+                                >
+                                  Use this
+                                </button>
+                              )}
+                            </div>
+                            <p className="text-[11px] text-blue-800 leading-relaxed">
+                              {match.reason}
+                            </p>
+                          </>
+                        ) : (
+                          <p className="text-[11px] text-blue-900 leading-relaxed font-medium">
+                            {match.reason}
+                          </p>
+                        )}
+                      </div>
+                    )}
+
                     {/*
                       Stated plainly because it is the behaviour that made the
                       per-technician scoping look broken: an unassigned job is

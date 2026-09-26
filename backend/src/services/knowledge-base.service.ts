@@ -1,6 +1,7 @@
 import { Types } from 'mongoose';
 import { KnowledgeItem, IKnowledgeItem, KnowledgeCategory } from '../models/knowledge-item.model';
 import { AppError } from '../types';
+import { escapeRegex } from '../utils/format';
 
 export interface CreateKnowledgeInput {
   category: KnowledgeCategory;
@@ -154,7 +155,7 @@ export class KnowledgeBaseService {
 
     // 2. Keyword regex search fallback
     const terms = trimmed.split(/\s+/).filter(Boolean);
-    const regexList = terms.map((t) => new RegExp(t, 'i'));
+    const regexList = terms.map((t) => new RegExp(escapeRegex(t), 'i'));
 
     const regexMatches = await KnowledgeItem.find({
       ...baseFilter,
@@ -196,7 +197,7 @@ export class KnowledgeBaseService {
     }
 
     if (filter.search && filter.search.trim()) {
-      const regex = new RegExp(filter.search.trim(), 'i');
+      const regex = new RegExp(escapeRegex(filter.search.trim()), 'i');
       query.$or = [{ title: regex }, { content: regex }, { tags: regex }];
     }
 

@@ -74,6 +74,9 @@ export interface IBusiness extends Document {
   googleReviewUrl?: string;
   onboardingStatus: OnboardingStatus;
   onboardingStep: OnboardingStep;
+  /** Stripe Connect account ID for direct payment settlement & 1099-K compliance. */
+  stripeAccountId?: string;
+  stripeAccountStatus?: 'pending' | 'active' | 'restricted';
   createdAt: Date;
   updatedAt: Date;
 }
@@ -88,6 +91,8 @@ export interface BusinessDTO {
   website?: string;
   address: IBusinessAddress;
   services: IServiceItem[];
+  stripeAccountId?: string;
+  stripeAccountStatus?: 'pending' | 'active' | 'restricted';
   serviceArea: IServiceArea;
   businessHours: IDayHours[];
   timezone?: string;

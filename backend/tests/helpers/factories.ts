@@ -100,6 +100,12 @@ export const createWorkspace = async (options: WorkspaceOptions = {}): Promise<W
     name: options.name ?? 'Test Heating & Air',
     businessType: 'HVAC',
     phone: options.phone ?? '+15551110000',
+    address: {
+      street: '100 Main St',
+      city: 'Dallas',
+      state: 'TX',
+      zip: '75001',
+    },
     onboardingStatus: 'completed',
     onboardingStep: 'completed',
     /**

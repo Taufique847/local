@@ -41,6 +41,10 @@ const customerSchema = new Schema<ICustomer>(
       city: { type: String, trim: true },
       state: { type: String, trim: true },
       zip: { type: String, trim: true },
+      coordinates: {
+        lat: { type: Number },
+        lng: { type: Number },
+      },
     },
     notes: {
       type: String,
@@ -155,6 +159,19 @@ const customerSchema = new Schema<ICustomer>(
       default: null,
     },
     /**
+     * Prior Express Written Consent (PEWC) for TCPA bulk marketing campaigns.
+     * Prevents statutory $500–$1,500/text fines by ensuring bulk blasts only reach opted-in leads.
+     */
+    marketingConsentGiven: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    marketingConsentTimestamp: {
+      type: Date,
+      default: null,
+    },
+    /**
      * Residential or commercial.
      *
      * The customer form has always had a toggle for this and five screens have
@@ -184,14 +201,10 @@ const customerSchema = new Schema<ICustomer>(
       /**
        * Gate, lockbox or keypad code.
        *
-       * Stored in plain text, and worth being clear about: this is a physical access
-       * credential readable by anyone with database access or a staff login. It is no
-       * worse than where it lived before (an `AgentMemory` value) and it has to reach
-       * the assigned technician's phone to be useful. It is deliberately excluded from
-       * every customer-facing channel and only ever appears in the dispatch SMS.
-       * Field-level encryption needs key management that does not exist here yet.
+       * Encrypted at rest using AES-256-GCM (`enc:v1:...`) to comply with CCPA
+       * and prevent residential premises burglary liability from leaked database dumps.
        */
-      gateCode: { type: String, trim: true, maxlength: 40 },
+      gateCode: { type: String, trim: true, maxlength: 256 },
       /** "Use the side gate", "buzz unit 4B", "park on the street". */
       accessInstructions: { type: String, trim: true, maxlength: 500 },
       /**

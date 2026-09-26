@@ -125,6 +125,19 @@ const callLogSchema = new Schema<ICallLog>(
       type: Boolean,
       default: false,
     },
+    disclosurePlayed: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    disclosurePlayedAt: {
+      type: Date,
+    },
+    disclosureText: {
+      type: String,
+      trim: true,
+      maxlength: 1000,
+    },
     /**
      * Owner-initiated test call. Real telephony and a real AI session, but kept
      * out of stats so trying the assistant does not skew the business's own

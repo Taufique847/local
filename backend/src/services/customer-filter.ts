@@ -43,6 +43,10 @@ export interface CustomerFilterInput {
   excludeEmailOptedOut?: boolean;
   /** Only customers with an email address. Used by email campaigns. */
   requireEmail?: boolean;
+  /**
+   * Only customers who have provided Prior Express Written Consent (PEWC) for TCPA marketing.
+   */
+  requireMarketingConsent?: boolean;
 }
 
 export const TAG_MATCH_MODES: TagMatchMode[] = ['any', 'all', 'none'];
@@ -195,6 +199,10 @@ export const buildCustomerQuery = async (
 
   if (filter.requireEmail) {
     and.push({ email: { $exists: true, $nin: [null, ''] } });
+  }
+
+  if (filter.requireMarketingConsent) {
+    query.marketingConsentGiven = true;
   }
 
   if (and.length) query.$and = and;

@@ -10,6 +10,7 @@ import {
   ServiceCategory 
 } from '../types/service.types';
 import { AppError } from '../types';
+import { escapeRegex } from '../utils/format';
 
 export class ServiceService {
   // Helper to normalize category strings safely
@@ -84,7 +85,7 @@ export class ServiceService {
     // Check for duplicate active service name within this business
     const existing = await Service.findOne({
       businessId: bId,
-      name: { $regex: new RegExp(`^${input.name.trim()}$`, 'i') },
+      name: { $regex: new RegExp(`^${escapeRegex(input.name.trim())}$`, 'i') },
       status: 'active',
     });
 
@@ -135,7 +136,7 @@ export class ServiceService {
     }
 
     if (query.search && query.search.trim()) {
-      const searchRegex = new RegExp(query.search.trim(), 'i');
+      const searchRegex = new RegExp(escapeRegex(query.search.trim()), 'i');
       filter.$or = [
         { name: searchRegex },
         { description: searchRegex },
@@ -212,7 +213,7 @@ export class ServiceService {
       const duplicate = await Service.findOne({
         _id: { $ne: serviceId },
         businessId: bId,
-        name: { $regex: new RegExp(`^${input.name.trim()}$`, 'i') },
+        name: { $regex: new RegExp(`^${escapeRegex(input.name.trim())}$`, 'i') },
         status: 'active',
       });
 

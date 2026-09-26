@@ -4,8 +4,9 @@ import { Customer } from '../models/customer.model';
 import { Appointment } from '../models/appointment.model';
 import { CallLog } from '../models/call-log.model';
 import { Equipment, EquipmentType, EquipmentLocation } from '../models/equipment.model';
-import { EquipmentService, EquipmentInput } from './equipment.service';
 import { ICustomerProperty } from '../types/customer.types';
+import { EquipmentService, EquipmentInput } from './equipment.service';
+import { encryptField, decryptField } from '../utils/crypto';
 
 /**
  * Turns a transcript fragment like "Carrier 4T heat pump" into a structured unit.
@@ -276,7 +277,8 @@ export class AgentMemoryService {
         const existing = (current as Record<string, unknown>)[key];
         // `hasPets: false` is a real answer, so `undefined` is the only empty state.
         if (existing !== undefined && existing !== null && existing !== '') continue;
-        updates[`property.${key}`] = value;
+        const finalValue = key === 'gateCode' && typeof value === 'string' ? encryptField(value) : value;
+        updates[`property.${key}`] = finalValue;
       }
 
       if (!Object.keys(updates).length) return;
@@ -383,7 +385,10 @@ export class AgentMemoryService {
     const property = (customer.property ?? {}) as ICustomerProperty;
     const propertyLines: string[] = [];
 
-    if (property.gateCode) propertyLines.push(`Gate/entry code: ${property.gateCode}`);
+    if (property.gateCode) {
+      const plainGateCode = decryptField(property.gateCode);
+      if (plainGateCode) propertyLines.push(`Gate/entry code: ${plainGateCode}`);
+    }
     if (property.accessInstructions) propertyLines.push(`Access: ${property.accessInstructions}`);
     if (property.hasPets) {
       propertyLines.push(`Pets on site${property.petNotes ? `: ${property.petNotes}` : ''}`);

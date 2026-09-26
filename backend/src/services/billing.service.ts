@@ -380,12 +380,14 @@ export class BillingService {
       );
     }
 
-    const businessName =
-      typeof invoice.businessId === 'object' && invoice.businessId?.name
-        ? invoice.businessId.name
-        : 'your contractor';
+    let business: any = invoice.businessId;
+    if (!business || typeof business !== 'object' || !business.name) {
+      business = await Business.findById(invoice.businessId).select('name stripeAccountId').lean();
+    }
 
-    const session = await this.stripeClient.checkout.sessions.create({
+    const businessName = business?.name || 'your contractor';
+
+    const sessionParams: Stripe.Checkout.SessionCreateParams = {
       mode: 'payment',
       line_items: [
         {
@@ -406,8 +408,28 @@ export class BillingService {
         kind: 'job_invoice',
         invoiceId: invoice._id.toString(),
         invoiceNumber: invoice.invoiceNumber,
+        businessId: String(business?._id || invoice.businessId),
       },
-    });
+    };
+
+    // FinCEN Money Transmitter Exemption & IRS 1099-K Protection:
+    // Contractors must connect their own Stripe Connect merchant account.
+    // Collecting customer job payments directly into platform bank accounts without a state Money Transmitter License (MTL)
+    // is unlawful under 18 U.S.C. § 1960 and subjects platform to contractor 1099-K tax liability.
+    if (!business?.stripeAccountId) {
+      throw new AppError(
+        'Online card payment is unavailable because the service provider has not connected their payment processing account. Please contact them directly to pay.',
+        400
+      );
+    }
+
+    sessionParams.payment_intent_data = {
+      transfer_data: {
+        destination: business.stripeAccountId,
+      },
+    };
+
+    const session = await this.stripeClient.checkout.sessions.create(sessionParams);
 
     await InvoiceService.attachCheckoutSession(invoice._id, session.id);
 

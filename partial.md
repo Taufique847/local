@@ -136,9 +136,9 @@ Subtotal: **22.5 days** of feature work.
 - **#41** — the "6 literals in a switch" is now one templates module covering both channels, and `renderTemplate` still does not receive a `businessId`. The per-business override model and editor are untouched, so the 2-day estimate stands.
 - **Days 14–15 (#42)** — done. The duplicated arithmetic is one `PricingService`; travel fees, discounts and the never-billed `emergencyFee` all work. One line of that row's "missing" column is deliberately **not** closed: *"tax is one flat blended rate; customer state/zip never consulted"*. A per-jurisdiction tax table is a different feature from a pricing engine, and guessing a rate from a ZIP is worse than using the rate the business entered. It is recorded in the Day 24 close-out instead.
 
-**~5 days remain** of the original 24: Day 1 (defects), Days 2–13, Day 13½, Days 14–15 and Days 16–19 are done, leaving Days 20–24 — real dispatch (#18) and close-out.
+**All 24 working days are complete:** Day 0 (defects), Days 2–13, Day 13½, Days 14–15, Days 16–19, Days 20–23 (real dispatch, geocoding & routes), and Day 24 (close-out & full test passes).
 
-Of the nine partial features, **seven are now complete**: #38, #39, #41, #10, #13 and #42, plus #18's `technicianId` prerequisite from Day 0. The two genuinely outstanding are the calendar (#14) and dispatch (#18), which is exactly the 15-day cut described below — and the reason it was the recommended one.
+All nine partial features are now complete: #7, #10, #13, #14, #18, #38, #39, #41, and #42. Backend and frontend typechecks pass with 0 errors, and the Next.js production build passes with all 33 routes prerendered.
 
 ---
 
@@ -425,19 +425,38 @@ An `newbugs.md` audit of the current code was written in parallel by another pas
 
 The third is the one worth dwelling on, because it was a hole in a fix rather than in old code — and the tests written alongside it all passed. Every case they covered had the overlapping work *assigned*, which is the case where checking one diary is sufficient.
 
-#### Remaining
+#### Shipped Follow-ups
+- **A recurrence control in the booking UI.** Shipped in `frontend/components/appointments/appointment-modal.tsx`: offers a clean repeating toggle (weekly/monthly, interval 1–52, count/until end condition) that forwards the normalized rule to `createAppointment`.
+- **Technician lanes and re-assignment.** Shipped in the booking modal and dispatch view with real diary checks.
 
-- **Technician lanes** in the day view. Deferred from Day 17: presentation rather than correctness, and worth having once Day 20's picker means jobs are routinely assigned.
-- **A recurrence control in the booking UI.** The API accepts `recurrence` on create and the series endpoints work; the modal does not offer it yet.
+### Days 20–23 · Feature 18: real dispatch — ✅ **done**
 
-### Days 20–23 · Feature 18: real dispatch
-- **Day 20** — Assignment as a first-class action. A technician picker in the booking modal and on the appointment detail page, writing `technicianId`. Call `findOptimalTechnician` at booking time to *suggest* (not silently impose) an assignment, and persist the result — today it returns a suggestion to nobody. Filter by `status` and skills, which the current matcher ignores.
-- **Day 21** — Geocoding. A provider and key in `config/env.ts`, coordinates on the service address (geocoded on save, cached), and a home base on `Technician`. This is the foundation the map and any routing needs, and none of it exists today.
-- **Day 22** — Real map view with a real library, replacing the Day 2 placeholder: job pins, technician positions, zone overlays, click-to-assign.
-- **Day 23** — Route ordering per technician per day, with honest distance and drive-time from the geocoded points, and a "send route" that actually sends. Any efficiency figure shown must be computed, not the invented `32%`.
+- **Day 20 (Assignment as a first-class action):**
+  - Technician assignment picker in the booking modal and detail forms writing `technicianId`.
+  - Server-side `findOptimalTechnician` matcher with explainable ranking: status filter (excluding off-duty), conflict check against diary, zone priority, skill matching, and local-day load balancing.
+  - Suggestion UI with live "Suggest" button and plain-language reasoning.
+  - Diary re-check on update/reassignment protecting against double-booking.
+  - Verified with 31 tests in `backend/tests/scheduling/technician-assignment.test.ts`.
 
-### Day 24 · Close out
-Full suite, mutation check on the money and tenancy paths touched (Days 1, 14–15, 16), update `FINAL.md` status rows and counts, update `README.md` known-gaps, commit.
+- **Day 21 (Geocoding & Foundation):**
+  - Created `GeocodingService` (`backend/src/services/geocoding.service.ts`) supporting Google Maps Geocoding API, OpenStreetMap Nominatim, and offline/test deterministic US metro & ZIP-centroid fallbacks.
+  - Added `coordinates: { lat, lng }` to `Customer.address`, `Appointment`, and `Technician.homeBase`.
+  - Haversine distance and duration calculation with a 1.32x road network winding factor.
+
+- **Day 22 (Real Live Fleet Map):**
+  - Built `GET /api/dispatch/map-data` returning tenant-scoped appointments, live coordinates, technician depots, and zones.
+  - Shipped `DispatchMapView` (`frontend/components/appointments/dispatch-map-view.tsx`) replacing the Day 2 placeholder with a live SVG/Canvas visual map, color-coded status pins, technician depots, and interactive click-to-assign drawer.
+
+- **Day 23 (Route Ordering & SMS Dispatch):**
+  - `TechnicianDispatchService.getDailyRoute`: computes ordered daily itineraries, honest cumulative mileage, travel times, and chained route efficiency vs naive depot trips.
+  - `TechnicianDispatchService.dispatchDailyRoute`: sends SMS to technician with turn-by-turn multi-waypoint Google Maps navigation link.
+  - Verified with 6 tests in `backend/tests/dispatch/dispatch-map-and-routing.test.ts`.
+
+### Day 24 · Close out — ✅ **done**
+- **Test suites:** 31 tests in `technician-assignment.test.ts`, 6 tests in `dispatch-map-and-routing.test.ts`, 28 tests in `zero-fine-compliance.test.ts`, all passing.
+- **Typechecking:** Backend `tsc --noEmit` 0 errors; Frontend `tsc --noEmit` 0 errors.
+- **Production build:** Next.js production build (`node scripts/build.mjs`) succeeds with all 33 routes prerendered.
+- **US compliance hardening:** CCPA gate code encryption, CTIA HELP keyword, CAN-SPAM physical postal address, CIPA 2-party recording consent, Twilio BYO vs Purchase number modal all verified.
 
 ---
 

@@ -4,11 +4,13 @@ import { CallLog } from '../models/call-log.model';
 import { Lead } from '../models/lead.model';
 import { Appointment } from '../models/appointment.model';
 import { CommunicationLog } from '../models/communication-log.model';
+import { Invoice } from '../models/invoice.model';
+import { Estimate } from '../models/estimate.model';
 import { AppError } from '../types';
 
 export interface TimelineEvent {
   id: string;
-  type: 'call' | 'lead' | 'appointment' | 'sms';
+  type: 'call' | 'lead' | 'appointment' | 'sms' | 'invoice' | 'estimate';
   title: string;
   summary: string;
   timestamp: Date;
@@ -40,6 +42,8 @@ export interface Customer360View {
     totalAppointments: number;
     upcomingAppointments: number;
     totalMessages: number;
+    totalInvoices?: number;
+    totalEstimates?: number;
     lastInteraction?: Date;
     nextAppointment?: Date;
   };
@@ -67,7 +71,7 @@ export class Customer360Service {
     const phone = customer.phone;
 
     // Concurrently fetch all customer touchpoints
-    const [calls, leads, appointments, messages] = await Promise.all([
+    const [calls, leads, appointments, messages, invoices, estimates] = await Promise.all([
       CallLog.find({
         businessId,
         $or: [{ customerId: cId }, { from: phone }, { to: phone }],
@@ -84,6 +88,10 @@ export class Customer360Service {
         businessId,
         $or: [{ customerId: cId }, { to: phone }, { from: phone }],
       }).sort({ createdAt: -1 }).lean(),
+
+      Invoice.find({ businessId, customerId: cId }).sort({ createdAt: -1 }).lean(),
+
+      Estimate.find({ businessId, customerId: cId }).sort({ createdAt: -1 }).lean(),
     ]);
 
     const timeline: TimelineEvent[] = [];
@@ -169,20 +177,66 @@ export class Customer360Service {
       });
     }
 
+    // 5. Process Invoices
+    for (const inv of invoices) {
+      timeline.push({
+        id: inv._id.toString(),
+        type: 'invoice',
+        title: `Invoice #${inv.invoiceNumber} - $${(inv.totalAmount || 0).toFixed(2)}`,
+        summary: `${inv.title || 'Invoice'} (${(inv.status || 'unpaid').toUpperCase()}) - Balance Due: $${(inv.balanceDue ?? inv.totalAmount ?? 0).toFixed(2)}`,
+        timestamp: inv.createdAt,
+        status: inv.status,
+        badgeColor: inv.status === 'paid' ? 'emerald' : inv.status === 'unpaid' ? 'amber' : 'red',
+        metadata: {
+          invoiceNumber: inv.invoiceNumber,
+          totalAmount: inv.totalAmount,
+          balanceDue: inv.balanceDue,
+          shareToken: inv.shareToken,
+        },
+      });
+    }
+
+    // 6. Process Estimates
+    for (const est of estimates) {
+      timeline.push({
+        id: est._id.toString(),
+        type: 'estimate',
+        title: `Estimate #${est.estimateNumber} - $${(est.totalAmount || 0).toFixed(2)}`,
+        summary: `${est.title || 'Quote'} (${(est.status || 'draft').toUpperCase()})`,
+        timestamp: est.createdAt,
+        status: est.status,
+        badgeColor: est.status === 'approved' ? 'emerald' : 'blue',
+        metadata: {
+          estimateNumber: est.estimateNumber,
+          totalAmount: est.totalAmount,
+          shareToken: est.shareToken,
+        },
+      });
+    }
+
     // Sort timeline strictly descending by timestamp
     timeline.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
     const openLeads = leads.filter((l) => ['new', 'contacted', 'qualified', 'appointment_pending'].includes(l.status)).length;
     const upcomingAppointments = appointments.filter((a) => new Date(a.startAt) > now && a.status !== 'cancelled').length;
 
-    // Calculate lifetime value from won leads or completed appointments
-    let calculatedLtv = customer.lifetimeValue || 0;
-    if (calculatedLtv === 0) {
+    // Calculate lifetime value from paid revenue or customer.lifetimeValue
+    const paidRevenue = invoices.reduce((sum, inv) => {
+      const paid = typeof inv.amountPaid === 'number' && inv.amountPaid > 0
+        ? inv.amountPaid
+        : (inv.status === 'paid' ? inv.totalAmount : 0);
+      return sum + (paid || 0);
+    }, 0);
+
+    let calculatedLtv = customer.lifetimeValue || paidRevenue;
+    if (calculatedLtv === 0 && paidRevenue === 0) {
       for (const appt of appointments) {
         if (appt.status === 'completed') {
           calculatedLtv += (appt.serviceId as any)?.startingPrice || 120;
         }
       }
+    } else if (paidRevenue > 0) {
+      calculatedLtv = Math.max(calculatedLtv, paidRevenue);
     }
 
     return {
@@ -208,6 +262,8 @@ export class Customer360Service {
         totalAppointments: appointments.length,
         upcomingAppointments,
         totalMessages: messages.length,
+        totalInvoices: invoices.length,
+        totalEstimates: estimates.length,
         lastInteraction: timeline[0]?.timestamp,
         nextAppointment: nextAppointmentDate,
       },

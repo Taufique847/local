@@ -314,7 +314,7 @@ const renderSmsBody = (type: MessageType, v: ReturnType<typeof resolve>): string
 
   switch (type) {
     case 'appointment_confirmation':
-      return `Hi ${v.customerFormal}, your appointment with ${v.business}${srv} is confirmed for ${v.dateTime}${addr}. Reply STOP to cancel notifications.`;
+      return `Hi ${v.customerFormal}, your appointment with ${v.business}${srv} is confirmed for ${v.dateTime}${addr}. Fee covers diagnostic inspection; written estimate provided on-site before repair work. Reply STOP to cancel notifications.`;
     case 'appointment_reminder':
       /**
        * Names the actual appointment time, and only promises what exists.
@@ -367,6 +367,7 @@ const renderEmailBody = (
         ],
         details: appointmentDetails(v),
         footerLines: [
+          'Diagnostic fee covers inspection only; all repairs require a written on-site estimate before work begins.',
           'Need to change something? Reply to this email or call us.',
           ...footerLines,
         ],

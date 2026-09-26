@@ -93,9 +93,10 @@ export const updateMemberSchema = z
   .object({
     businessRole: z.enum(['owner', 'dispatcher', 'technician']).optional(),
     isActive: z.boolean().optional(),
+    technicianId: objectId.optional().nullable(),
   })
   .refine((data) => Object.keys(data).length > 0, {
-    message: 'Provide a role or an active flag to change',
+    message: 'Provide a role, active flag, or technician link to change',
   });
 
 // ---------------------------------------------------------------------------
@@ -301,6 +302,31 @@ export const serviceZoneSchema = z.object({
   active: z.boolean().optional(),
 });
 
+/**
+ * POST /api/dispatch/match-tech
+ *
+ * Previously unvalidated, which mattered less while nothing called it and matters now that
+ * the booking form does. `startAt` in particular was never sent at all, so the matcher's
+ * availability check was dead code in production.
+ *
+ * `customerId` and `serviceId` are shorthands: the server derives the ZIP and the skill tag
+ * from them, so the browser cannot send a ZIP that disagrees with the customer record the
+ * travel fee is calculated from.
+ */
+export const matchTechnicianSchema = z
+  .object({
+    zipCode: z.string().trim().regex(/^\d{5}$/, 'ZIP code must be 5 digits').optional(),
+    requiredSkill: trimmed(60).optional(),
+    customerId: objectId.optional(),
+    serviceId: objectId.optional(),
+    startAt: z.coerce.date().optional(),
+    endAt: z.coerce.date().optional(),
+  })
+  .refine((data) => !data.endAt || !data.startAt || data.endAt.getTime() > data.startAt.getTime(), {
+    message: 'The end time must be after the start time',
+    path: ['endAt'],
+  });
+
 export const technicianSchema = z.object({
   name: trimmed(120).min(2, 'Technician name is required'),
   phone: usPhone,
@@ -375,6 +401,7 @@ export const createCustomerSchema = z.object({
   status: z.enum(['active', 'inactive']).optional(),
   source: trimmed(60).optional(),
   propertyType: z.enum(['residential', 'commercial']).optional(),
+  marketingConsentGiven: z.boolean().optional(),
   // Declared here or Zod strips it and Mongoose never sees it — the exact bug that
   // made `propertyType` and `diagnosticFee` silently vanish on save.
   property: customerPropertySchema.optional(),
@@ -752,6 +779,48 @@ export const workerJobStatusSchema = z.object({
 });
 
 /**
+ * PATCH /api/worker/jobs/:appointmentId/execution
+ *
+ * Validates checklist items, parts used, and protects MongoDB against 16MB BSON crash
+ * by capping photo payload to 3MB per photo and max 12 photos per job.
+ */
+export const workerJobExecutionSchema = z.object({
+  checklist: z
+    .array(
+      z.object({
+        item: trimmed(200).min(1, 'Checklist item cannot be empty'),
+        completed: z.boolean(),
+      })
+    )
+    .max(50, 'Checklist cannot exceed 50 items')
+    .optional(),
+  photos: z
+    .array(
+      z.object({
+        url: z
+          .string()
+          .min(1, 'Photo URL or data is required')
+          .max(3_000_000, 'Photo payload exceeds maximum 3MB limit'),
+        caption: trimmed(200).optional(),
+        phase: z.enum(['before', 'after']).default('before'),
+      })
+    )
+    .max(12, 'Maximum 12 photos allowed per appointment')
+    .optional(),
+  partsUsed: z
+    .array(
+      z.object({
+        partName: trimmed(200).min(1, 'Part name is required'),
+        quantity: z.coerce.number().positive('Quantity must be positive').max(1000),
+        unitCost: z.coerce.number().min(0, 'Unit cost cannot be negative').max(100000),
+      })
+    )
+    .max(50, 'Cannot exceed 50 parts per job')
+    .optional(),
+});
+
+
+/**
  * POST /api/appointments/:id/cancel-series
  *
  * `from` defaults to now in the service. Accepted so an owner can end a plan from a
@@ -761,3 +830,42 @@ export const cancelSeriesSchema = z.object({
   from: z.coerce.date().optional(),
   reason: trimmed(500).optional(),
 });
+
+// ---------------------------------------------------------------------------
+// Services
+// ---------------------------------------------------------------------------
+
+export const serviceCategoryEnum = z.enum([
+  'Cooling',
+  'Heating',
+  'Maintenance',
+  'Installation',
+  'Indoor Air Quality',
+  'Ductwork',
+  'Emergency',
+  'Other',
+]);
+
+export const createServiceSchema = z.object({
+  name: trimmed(150).min(1, 'Service name is required'),
+  description: trimmed(1000).optional(),
+  durationMinutes: z.coerce.number().int().min(1, 'Duration must be at least 1 minute').max(1440).optional(),
+  startingPrice: z.coerce.number().min(0, 'Starting price cannot be negative').max(1_000_000).optional(),
+  category: serviceCategoryEnum.optional(),
+  isEmergencyService: z.boolean().optional(),
+  status: z.enum(['active', 'inactive', 'archived']).optional(),
+});
+
+export const updateServiceSchema = z
+  .object({
+    name: trimmed(150).min(1, 'Service name is required').optional(),
+    description: trimmed(1000).optional(),
+    durationMinutes: z.coerce.number().int().min(1, 'Duration must be at least 1 minute').max(1440).optional(),
+    startingPrice: z.coerce.number().min(0, 'Starting price cannot be negative').max(1_000_000).optional(),
+    category: serviceCategoryEnum.optional(),
+    isEmergencyService: z.boolean().optional(),
+    status: z.enum(['active', 'inactive', 'archived']).optional(),
+  })
+  .refine((data) => Object.keys(data).length > 0, {
+    message: 'Provide at least one field to update',
+  });

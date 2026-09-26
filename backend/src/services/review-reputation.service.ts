@@ -4,6 +4,7 @@ import { Appointment } from '../models/appointment.model';
 import { Customer } from '../models/customer.model';
 import { Business } from '../models/business.model';
 import { CommunicationService } from './communication.service';
+import { LeadRecoveryService } from './lead-recovery.service';
 import { AppError } from '../types';
 import { logger } from '../utils/logger';
 
@@ -88,13 +89,11 @@ export class ReviewReputationService {
 
     for (const campaign of due) {
       const business = await Business.findById(campaign.businessId);
-      const timezone = business?.timezone || 'America/New_York';
+      const recipientTz = CommunicationService.resolveRecipientTimezone(campaign.customerPhone, business?.timezone || 'America/New_York');
 
-      // Outside 8am-9pm local: push to shortly after the window opens.
-      if (CommunicationService.isWithinQuietHours(timezone)) {
-        const next = new Date();
-        next.setHours(8, 10, 0, 0);
-        if (next.getTime() <= Date.now()) next.setDate(next.getDate() + 1);
+      // TCPA Quiet Hours (47 CFR § 64.1200(c)(1)): evaluate in recipient's local timezone
+      if (CommunicationService.isWithinQuietHours(recipientTz, new Date(), campaign.customerPhone)) {
+        const next = LeadRecoveryService.calculateTcpaSafeFollowUp(new Date(), recipientTz, campaign.customerPhone);
         campaign.scheduledAt = next;
         await campaign.save();
         deferred++;
@@ -354,17 +353,21 @@ export class ReviewReputationService {
         responseText = `Thank you so much for the ${rating}-star rating, ${customerName}! We really appreciate you taking the time to let us know.`;
       }
     } else {
-      // 🛡️ REPUTATION SHIELDING (1-3 Stars)
-      // Block Google review link! Keep feedback strictly internal and dispatch immediate owner alert.
+      // 🛡️ REPUTATION RESOLUTION & FTC COMPLIANT ESCALATION (1-3 Stars)
+      // Per FTC 16 CFR Part 465 (Consumer Reviews & Testimonials Rule), review gating
+      // or blocking/suppressing public review links for unhappy customers is strictly prohibited
+      // (violations carry civil penalties up to $53,088 per incident).
+      // We provide public review access while simultaneously alerting management with a 24h resolution SLA.
+      const googleReviewUrl = business?.googleReviewUrl?.trim();
       campaign.status = 'negative_shielded';
-      campaign.isShielded = true;
+      campaign.isShielded = false; // FTC 16 CFR Part 465 compliance: NOT shielded from public review
       campaign.escalatedToOwner = true;
       campaign.slaDeadlineAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24h resolution SLA
-      campaign.escalationNotes = `🚨 Negative feedback alert (${rating}/5 stars): "${messageText}". Public Google link shielded. 24h resolution SLA active.`;
+      campaign.escalationNotes = `🚨 Customer feedback alert (${rating}/5 stars): "${messageText}". Escalated to owner with 24h resolution SLA. Public review link made accessible per FTC 16 CFR Part 465.`;
 
       // Real-Time Owner Push SMS Dispatch:
       if (business?.phone) {
-        const ownerAlert = `🚨 REPUTATION SHIELD ALERT: Customer ${customerName} (${campaign.customerPhone}) gave ${rating}⭐ for ${campaign.technicianName || 'tech'} ('${messageText}'). Google review BLOCKED! 24h resolution SLA active. Tap to call customer: tel:${campaign.customerPhone}`;
+        const ownerAlert = `🚨 CUSTOMER ESCALATION: Customer ${customerName} (${campaign.customerPhone}) gave ${rating}⭐ for ${campaign.technicianName || 'tech'} ('${messageText}'). 24h resolution SLA active. Tap to call customer: tel:${campaign.customerPhone}`;
         // Awaited, and the flag is only set on success. Previously the send was
         // fire-and-forget while `ownerAlertSent` was set unconditionally, so the
         // dashboard claimed the owner had been alerted even when no SMS left.
@@ -386,7 +389,12 @@ export class ReviewReputationService {
         }
       }
 
-      responseText = `We are truly sorry your service did not meet expectations, ${customerName}. We take customer satisfaction very seriously. Our management team has been alerted immediately and will personally follow up to resolve this for you.`;
+      if (googleReviewUrl) {
+        campaign.googleReviewUrl = googleReviewUrl;
+        responseText = `We are truly sorry your service did not meet expectations, ${customerName}. Our management team has been alerted immediately and will personally follow up to resolve this for you. You may also share your honest feedback publicly here: ${googleReviewUrl}`;
+      } else {
+        responseText = `We are truly sorry your service did not meet expectations, ${customerName}. We take customer satisfaction very seriously. Our management team has been alerted immediately and will personally follow up to resolve this for you.`;
+      }
     }
 
     await campaign.save();

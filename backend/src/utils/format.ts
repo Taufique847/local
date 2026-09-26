@@ -322,3 +322,22 @@ export const zonedDateKey = (
   if (!p) return '';
   return `${p.year}-${String(p.month).padStart(2, '0')}-${String(p.day).padStart(2, '0')}`;
 };
+
+/**
+ * Escapes special regex characters in a user-provided search string
+ * to prevent ReDoS and RegExp syntax errors.
+ */
+export const escapeRegex = (value: string): string =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * Redacts payment card numbers (13-19 digits, Visa, MasterCard, Amex, Discover)
+ * and CVV security codes from text strings (transcripts, logs, notes) to satisfy PCI-DSS.
+ */
+export const scrubSensitiveData = (text: string): string => {
+  if (!text) return text;
+  return text
+    .replace(/\b(?:\d[ -]*?){13,19}\b/g, '[CARD NUMBER REDACTED]')
+    .replace(/(?:cvv|cvc|security code|card code)(?:\s+(?:is|of))?[\s:]*([0-9]{3,4})\b/gi, '[CVV REDACTED]');
+};
+

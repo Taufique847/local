@@ -15,6 +15,7 @@ import { renderNotification } from './notification-templates';
 import { config } from '../config/env';
 import { AppError } from '../types';
 import { logger } from '../utils/logger';
+import { isEarlyQuietHoursJurisdiction, getTimezoneForPhoneNumber } from '../utils/disclosure';
 import twilio from 'twilio';
 
 export class CommunicationService {
@@ -28,21 +29,38 @@ export class CommunicationService {
   }
 
   /**
-   * Evaluates TCPA Quiet Hours (8:00 AM - 9:00 PM local business time)
+   * Resolves the recipient's local timezone from their phone number.
+   * Under TCPA (47 CFR § 64.1200(c)(1)), quiet hours must be evaluated
+   * at the called party's location.
    */
-  public static isWithinQuietHours(timezone: string = 'America/New_York'): boolean {
+  public static resolveRecipientTimezone(
+    phoneNumber?: string,
+    fallback: string = 'America/New_York'
+  ): string {
+    if (!phoneNumber) return fallback;
+    return getTimezoneForPhoneNumber(phoneNumber, fallback);
+  }
+
+  /**
+   * Evaluates TCPA Quiet Hours (8:00 AM - 9:00 PM federal TCPA; 8:00 AM - 8:00 PM in FL/OK/MD Mini-TCPA states).
+   */
+  public static isWithinQuietHours(
+    timezone: string = 'America/New_York',
+    date: Date = new Date(),
+    phoneNumber?: string
+  ): boolean {
     try {
-      const now = new Date();
-      const timeString = now.toLocaleTimeString('en-US', {
+      const timeString = date.toLocaleTimeString('en-US', {
         timeZone: timezone,
         hour12: false,
         hour: '2-digit',
       });
       const hour = parseInt(timeString, 10);
-      // Return true if outside 8 AM - 9 PM
-      return hour < 8 || hour >= 21;
+      const isEarlyState = isEarlyQuietHoursJurisdiction(phoneNumber);
+      const cutoffHour = isEarlyState ? 20 : 21; // 8:00 PM for FL/OK/MD, 9:00 PM federal
+      return hour < 8 || hour >= cutoffHour;
     } catch {
-      return false; // Default to safe send if timezone fails
+      return true; // TCPA Fail-Closed: Treat as quiet hours on timezone formatting failure
     }
   }
 
@@ -90,12 +108,32 @@ export class CommunicationService {
       }
     }
 
-    // Check quiet hours unless explicitly bypassed (e.g. emergency or customer-initiated)
-    if (!input.bypassQuietHours && this.isWithinQuietHours(business.timezone)) {
+    // Check quiet hours in recipient's local timezone (TCPA 47 CFR § 64.1200(c)(1))
+    const recipientTimezone = CommunicationService.resolveRecipientTimezone(input.to, business.timezone);
+    if (!input.bypassQuietHours && this.isWithinQuietHours(recipientTimezone, new Date(), input.to)) {
+      const isEarly = isEarlyQuietHoursJurisdiction(input.to);
+      const cutoffStr = isEarly ? '8:00 PM' : '9:00 PM';
       throw new AppError(
-        `Outside permitted texting hours (8:00 AM – 9:00 PM ${business.timezone || 'local time'}). This message was not sent.`,
+        `Outside permitted texting hours (8:00 AM – ${cutoffStr} ${recipientTimezone || 'local time'}). This message was not sent.`,
         409
       );
+    }
+
+    // Florida / Oklahoma Mini-TCPA limit: maximum 3 commercial contacts per 24 hours
+    if (!input.bypassQuietHours && isEarlyQuietHoursJurisdiction(input.to)) {
+      const sentLast24h = await CommunicationLog.countDocuments({
+        businessId,
+        to: input.to,
+        direction: 'outbound',
+        channel: 'sms',
+        createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+      });
+      if (sentLast24h >= 3) {
+        throw new AppError(
+          'Daily communication limit reached for this recipient under Florida/Oklahoma Mini-TCPA rules (maximum 3 contacts per 24-hour period).',
+          429
+        );
+      }
     }
 
     // Resolve the outbound From number.
@@ -165,12 +203,20 @@ export class CommunicationService {
     }
 
     try {
-      const twilioMsg = await client.messages.create({
-        from: fromNumber,
+      const messageParams: any = {
         to: input.to,
         body,
         statusCallback: `${config.twilioWebhookBaseUrl}/api/webhooks/twilio/sms-status`,
-      });
+      };
+
+      // A2P 10DLC Campaign Routing: Use Messaging Service SID if configured
+      if (config.twilioMessagingServiceSid) {
+        messageParams.messagingServiceSid = config.twilioMessagingServiceSid;
+      } else {
+        messageParams.from = fromNumber;
+      }
+
+      const twilioMsg = await client.messages.create(messageParams);
       // 'sent' — not 'delivered'. Delivery is only known once Twilio calls the
       // status webhook back.
       log.twilioSid = twilioMsg.sid;
@@ -235,9 +281,11 @@ export class CommunicationService {
      */
     const optOutKeywords = ['STOP', 'STOPALL', 'UNSUBSCRIBE', 'CANCEL', 'END', 'QUIT'];
     const optInKeywords = ['START', 'UNSTOP'];
+    const helpKeywords = ['HELP', 'INFO'];
 
     const isOptOut = optOutKeywords.includes(upper);
     const isOptIn = optInKeywords.includes(upper);
+    const isHelp = helpKeywords.includes(upper);
 
     if (customer && (isOptOut || isOptIn)) {
       const wasOptedOut = Boolean(customer.isOptedOut);
@@ -309,6 +357,25 @@ export class CommunicationService {
       await claim();
       return {
         reply: 'You are subscribed again and will receive appointment updates. Reply STOP at any time to unsubscribe.',
+      };
+    }
+
+    /**
+     * CTIA Mandatory HELP / INFO keyword handler (CTIA Messaging Principles 5.1.2).
+     * Commercial A2P automated messaging systems MUST provide immediate assistance,
+     * contact information, and disclosure of message frequency / rates.
+     */
+    if (isHelp) {
+      await claim();
+      const business = await Business.findById(businessId).select('name phone email').lean();
+      const name = business?.name || 'Support';
+      const contactInfo = business?.phone
+        ? `call ${business.phone}`
+        : business?.email
+        ? `email ${business.email}`
+        : 'contact our office';
+      return {
+        reply: `${name}: For support, ${contactInfo}. Msg & data rates may apply. Reply STOP to cancel.`,
       };
     }
 

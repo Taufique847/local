@@ -14,6 +14,7 @@ import { Service } from '../../models/service.model';
 import { AppError } from '../../types';
 import { config } from '../../config/env';
 import { logger } from '../../utils/logger';
+import { scrubSensitiveData } from '../../utils/format';
 
 export class VoiceSessionService {
   private static activeSessions: Map<string, IVoiceSession> = new Map();
@@ -193,14 +194,19 @@ export class VoiceSessionService {
             customerId: session.customerId || null,
             leadId: session.leadId || null,
             appointmentId: session.appointmentId || null,
-            transcript: session.transcript,
+            disclosurePlayed: session.disclosurePlayed,
+            transcript: session.transcript.map((t) => ({
+              role: t.role,
+              text: scrubSensitiveData(t.text),
+              timestamp: t.timestamp,
+            })),
             toolExecutions: session.toolExecutions,
             outcome: session.outcome,
             aiHandled: true,
             metrics,
             notes: session.transcript
               .filter((t) => t.role !== 'system')
-              .map((t) => `${t.role}: ${t.text}`)
+              .map((t) => `${t.role}: ${scrubSensitiveData(t.text)}`)
               .join('\n')
               .slice(0, 1990),
           },

@@ -10,24 +10,50 @@ import { AvailabilityService } from './availability.service';
 import { AppointmentService } from './appointment.service';
 import { KnowledgeBaseService } from './knowledge-base.service';
 import { logger } from '../utils/logger';
+import { zonedParts, zonedWallClockToUtc } from '../utils/format';
+import { isEarlyQuietHoursJurisdiction } from '../utils/disclosure';
 
 export class LeadRecoveryService {
   /** Give up on a drip step after this many failed send attempts. */
   private static readonly MAX_DRIP_ATTEMPTS = 5;
 
   /**
-   * Adjusts a follow-up timestamp so it never lands inside TCPA Quiet Hours (8:00 AM - 9:00 PM).
-   * If it falls during quiet hours, automatically rolls forward to 8:05 AM the next morning.
+   * Adjusts a follow-up timestamp so it never lands inside TCPA Quiet Hours (8:00 AM - 9:00 PM federal,
+   * 8:00 AM - 8:00 PM in Florida/Oklahoma/Maryland Mini-TCPA states).
+   * If it falls during quiet hours, automatically rolls forward to 8:05 AM in the recipient's timezone.
    */
-  public static calculateTcpaSafeFollowUp(targetDate: Date, timezone: string = 'America/Chicago'): Date {
-    const nextSafe = new Date(targetDate);
-    if (CommunicationService.isWithinQuietHours(timezone)) {
-      nextSafe.setHours(8, 5, 0, 0);
-      if (nextSafe.getTime() <= targetDate.getTime()) {
-        nextSafe.setDate(nextSafe.getDate() + 1);
-      }
+  public static calculateTcpaSafeFollowUp(
+    targetDate: Date,
+    timezone: string = 'America/Chicago',
+    phoneNumber?: string
+  ): Date {
+    const p = zonedParts(targetDate, timezone);
+    if (!p) return targetDate;
+
+    // Check if phone number is subject to 8:00 PM Mini-TCPA cutoff
+    const cutoffHour = isEarlyQuietHoursJurisdiction(phoneNumber) ? 20 : 21;
+
+    // TCPA Quiet Hours: Before 8:00 AM or at/after cutoffHour local time
+    const isQuietHours = p.hour < 8 || p.hour >= cutoffHour;
+
+    if (!isQuietHours) {
+      return targetDate;
     }
-    return nextSafe;
+
+    if (p.hour < 8) {
+      // Early morning on the same local calendar day: roll forward to 8:05 AM today
+      return zonedWallClockToUtc(p.year, p.month, p.day, 8 * 60 + 5, timezone);
+    } else {
+      // Evening/night: roll forward to 8:05 AM the next morning in this timezone
+      const nextDay = new Date(Date.UTC(p.year, p.month - 1, p.day + 1));
+      return zonedWallClockToUtc(
+        nextDay.getUTCFullYear(),
+        nextDay.getUTCMonth() + 1,
+        nextDay.getUTCDate(),
+        8 * 60 + 5,
+        timezone
+      );
+    }
   }
 
   /**
@@ -106,9 +132,42 @@ export class LeadRecoveryService {
     const greeting = customer?.firstName ? `Hi ${customer.firstName}` : 'Hello';
     const step1Message = `${greeting}, sorry we missed your call at ${businessName}! Do you need urgent HVAC repair or a service visit? Reply with your address and preferred time, and our automated system will lock in an arrival window for you right away.`;
 
-    // Smart 8:05 AM TCPA Safe Next Follow-up
+    const timezone = CommunicationService.resolveRecipientTimezone(callerPhone, business?.timezone || 'America/Chicago');
+    const isQuiet = CommunicationService.isWithinQuietHours(timezone, new Date(), callerPhone);
+
+    if (isQuiet) {
+      // 🛡️ TCPA QUIET HOURS DEFENSE:
+      // If a missed call occurs during late-night quiet hours (after 8:00 PM / 9:00 PM),
+      // do NOT send an immediate SMS. Schedule Step 1 for 8:05 AM next morning in caller's timezone.
+      const safeStep1Time = LeadRecoveryService.calculateTcpaSafeFollowUp(
+        new Date(),
+        timezone,
+        callerPhone
+      );
+
+      const recovery = await LeadRecovery.create({
+        businessId,
+        callLogId: callLog._id,
+        leadId: callLog.leadId || undefined,
+        customerId: customer?._id || undefined,
+        callerPhone,
+        customerName,
+        status: 'pending',
+        currentStep: 0,
+        nextFollowUpAt: safeStep1Time,
+        messages: [],
+      });
+
+      return recovery;
+    }
+
+    // Daytime: Safe to send instant Speed-to-Lead SMS
     const rawStep2Time = new Date(Date.now() + 2 * 60 * 60 * 1000);
-    const safeStep2Time = LeadRecoveryService.calculateTcpaSafeFollowUp(rawStep2Time, business?.timezone || 'America/Chicago');
+    const safeStep2Time = LeadRecoveryService.calculateTcpaSafeFollowUp(
+      rawStep2Time,
+      timezone,
+      callerPhone
+    );
 
     const recovery = await LeadRecovery.create({
       businessId,
@@ -136,18 +195,18 @@ export class LeadRecoveryService {
       body: step1Message,
       customerId: customer?._id?.toString(),
       type: 'missed_call_followup',
-      bypassQuietHours: true,
+      bypassQuietHours: false,
     }).catch((err: any) => console.error('Error sending Speed-to-Lead SMS:', err));
 
     return recovery;
   }
 
   /**
-   * Processes all due follow-up drips (Step 2 and Step 3) with next-day 8:05 AM quiet hours rollover
+   * Processes all due follow-up drips (Step 1 deferred, Step 2, and Step 3) with next-day 8:05 AM quiet hours rollover
    */
   public static async processDueDrips(businessId?: Types.ObjectId | string): Promise<number> {
     const query: any = {
-      status: { $in: ['speed_to_lead_sent', 'drip_step_2_sent'] },
+      status: { $in: ['pending', 'speed_to_lead_sent', 'drip_step_2_sent'] },
       nextFollowUpAt: { $lte: new Date() },
     };
 
@@ -162,21 +221,60 @@ export class LeadRecoveryService {
       const business = await Business.findById(recovery.businessId);
       const businessName = business?.name || 'Apex Air';
       const name = recovery.customerName ? recovery.customerName.split(' ')[0] : 'there';
-      const timezone = business?.timezone || 'America/Chicago';
+      const timezone = CommunicationService.resolveRecipientTimezone(recovery.callerPhone, business?.timezone || 'America/Chicago');
 
       // TCPA Quiet Hours Guard: If current time is in quiet hours, roll forward to 8:05 AM tomorrow
-      if (CommunicationService.isWithinQuietHours(timezone)) {
-        recovery.nextFollowUpAt = LeadRecoveryService.calculateTcpaSafeFollowUp(new Date(), timezone);
+      if (CommunicationService.isWithinQuietHours(timezone, new Date(), recovery.callerPhone)) {
+        recovery.nextFollowUpAt = LeadRecoveryService.calculateTcpaSafeFollowUp(
+          new Date(),
+          timezone,
+          recovery.callerPhone
+        );
         await recovery.save();
         continue;
       }
 
-      if (recovery.currentStep === 1) {
+      if (recovery.currentStep === 0 || recovery.status === 'pending') {
+        // Step 1: Deferred Speed-to-Lead dispatched after quiet hours end
+        const greeting = recovery.customerName ? `Hi ${name}` : 'Hello';
+        const step1Message = `${greeting}, sorry we missed your call at ${businessName}! Do you need urgent HVAC repair or a service visit? Reply with your address and preferred time, and our automated system will lock in an arrival window for you right away.`;
+
+        const sent = await LeadRecoveryService.attemptDripSend(recovery, {
+          body: step1Message,
+          label: 'step_1',
+        });
+        if (!sent) continue;
+
+        const rawStep2Time = new Date(Date.now() + 2 * 60 * 60 * 1000);
+        const safeStep2Time = LeadRecoveryService.calculateTcpaSafeFollowUp(
+          rawStep2Time,
+          timezone,
+          recovery.callerPhone
+        );
+
+        recovery.messages.push({
+          direction: 'outbound',
+          text: step1Message,
+          sentAt: new Date(),
+        });
+        recovery.currentStep = 1;
+        recovery.status = 'speed_to_lead_sent';
+        recovery.speedToLeadSentAt = new Date();
+        recovery.nextFollowUpAt = safeStep2Time;
+        recovery.dripAttempts = 0;
+        recovery.lastDripError = undefined;
+        await recovery.save();
+        processedCount++;
+      } else if (recovery.currentStep === 1) {
         // Step 2 Drip: Urgency & slot hold (2 hours later)
         const step2Message = `Hi ${name}, our ${businessName} technicians have 2 priority arrival windows open for tomorrow morning. Reply YES to reserve your slot before they fill up!`;
 
         const rawStep3Time = new Date(Date.now() + 22 * 60 * 60 * 1000);
-        const safeStep3Time = LeadRecoveryService.calculateTcpaSafeFollowUp(rawStep3Time, timezone);
+        const safeStep3Time = LeadRecoveryService.calculateTcpaSafeFollowUp(
+          rawStep3Time,
+          timezone,
+          recovery.callerPhone
+        );
 
         // Send BEFORE advancing the state machine.
         //

@@ -17,7 +17,7 @@ import { BillingService } from './billing.service';
 import { RealtimeVoiceProvider } from './voice/realtime-voice-provider.service';
 import { config } from '../config/env';
 import { logger } from '../utils/logger';
-import { zonedDayBounds } from '../utils/format';
+import { zonedDayBounds, escapeRegex } from '../utils/format';
 
 export class CallService {
   /** Test calls allowed per business per rolling hour. */
@@ -65,7 +65,7 @@ export class CallService {
     }
 
     if (filter.search) {
-      const regex = new RegExp(filter.search.trim(), 'i');
+      const regex = new RegExp(escapeRegex(filter.search.trim()), 'i');
       const matchingCustomers = await Customer.find({
         businessId,
         $or: [{ firstName: regex }, { lastName: regex }, { phone: regex }],

@@ -3,7 +3,8 @@ import { WorkerController } from '../controllers/worker.controller';
 import { authMiddleware } from '../middleware/auth.middleware';
 import { attachBusinessContext } from '../middleware/business-role';
 import { validateBody } from '../middleware/validate';
-import { workerJobStatusSchema } from '../validation/schemas';
+import { workerJobStatusSchema, workerJobExecutionSchema } from '../validation/schemas';
+
 
 const router = Router();
 
@@ -22,8 +23,13 @@ router.patch(
   validateBody(workerJobStatusSchema),
   WorkerController.updateJobStatus as any
 );
-router.patch('/jobs/:appointmentId/execution', WorkerController.updateJobExecution as any);
+router.patch(
+  '/jobs/:appointmentId/execution',
+  validateBody(workerJobExecutionSchema),
+  WorkerController.updateJobExecution as any
+);
 router.post('/jobs/:appointmentId/complete', WorkerController.completeJobAndGenerateInvoice as any);
+
 
 export const workerRoutes = router;
 export default router;

@@ -1,6 +1,7 @@
 import { Types } from 'mongoose';
 import { CustomerSegment, ICustomerSegment } from '../models/customer-segment.model';
 import { Customer } from '../models/customer.model';
+import { Business } from '../models/business.model';
 import { NotificationService } from './notification.service';
 import {
   CustomerFilterInput,
@@ -223,6 +224,7 @@ export class CustomerSegmentService {
       body: string;
       subject?: string;
       dryRun?: boolean;
+      requireMarketingConsent?: boolean;
     }
   ): Promise<CampaignResult> {
     const segment = await this.requireSegment(businessId, segmentId);
@@ -252,8 +254,23 @@ export class CustomerSegmentService {
       );
     }
 
-    if (input.channel === 'email' && !input.subject?.trim()) {
-      throw new AppError('Give the email a subject line.', 400);
+    if (input.channel === 'email') {
+      if (!input.subject?.trim()) {
+        throw new AppError('Give the email a subject line.', 400);
+      }
+      // CAN-SPAM Act requires a valid physical business postal address
+      const business = await Business.findById(businessId);
+      if (
+        !business?.address?.street?.trim() ||
+        !business?.address?.city?.trim() ||
+        !business?.address?.state?.trim() ||
+        !business?.address?.zip?.trim()
+      ) {
+        throw new AppError(
+          'CAN-SPAM compliance requires a valid physical business address (street, city, state, zip) in Business Settings before sending email marketing campaigns.',
+          400
+        );
+      }
     }
 
     /**
@@ -265,7 +282,17 @@ export class CustomerSegmentService {
      */
     const audienceFilter: CustomerFilterInput = {
       ...segment.filter,
-      ...(input.channel === 'sms' ? { excludeOptedOut: true } : {}),
+      ...(input.channel === 'sms'
+        ? {
+            excludeOptedOut: true,
+            // TCPA / FCC Prior Express Written Consent (PEWC) compliance:
+            // For SMS campaign blasts, marketing consent is required by default to protect
+            // against autodialing non-consenting transactional customers ($500–$1,500/text fine).
+            ...(input.requireMarketingConsent ?? segment.filter?.requireMarketingConsent ?? true
+              ? { requireMarketingConsent: true }
+              : {}),
+          }
+        : {}),
       /**
        * Email campaigns exclude anyone who unsubscribed, and require an address.
        *
@@ -300,56 +327,62 @@ export class CustomerSegmentService {
 
     const recipients = await Customer.find(query).select('_id').lean();
 
-    for (const recipient of recipients) {
-      try {
-        const outcome = await NotificationService.send(
-          businessId,
-          // Ad-hoc copy, so it is logged as `custom` rather than misfiled under a
-          // transactional type it is not.
-          'custom',
-          { customerId: String(recipient._id) },
-          {},
-          {
-            channels: input.channel,
-            bodyOverride: body,
-            subjectOverride: input.subject,
-            /**
-             * This is the only caller that sets it. It adds the unsubscribe link and
-             * headers on email, and makes the send honour `Customer.emailOptedOut` —
-             * neither of which a transactional message should do.
-             */
-            marketing: true,
-            /**
-             * Quiet hours are NOT bypassed.
-             *
-             * Every transactional send in the product bypasses them because the
-             * customer just asked for something. A marketing campaign is the exact
-             * opposite — it is a cold contact, and the 8pm–9am window is what it
-             * exists for.
-             */
+    const BATCH_SIZE = 10;
+    for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
+      const chunk = recipients.slice(i, i + BATCH_SIZE);
+      await Promise.all(
+        chunk.map(async (recipient) => {
+          try {
+            const outcome = await NotificationService.send(
+              businessId,
+              // Ad-hoc copy, so it is logged as `custom` rather than misfiled under a
+              // transactional type it is not.
+              'custom',
+              { customerId: String(recipient._id) },
+              {},
+              {
+                channels: input.channel,
+                bodyOverride: body,
+                subjectOverride: input.subject,
+                /**
+                 * This is the only caller that sets it. It adds the unsubscribe link and
+                 * headers on email, and makes the send honour `Customer.emailOptedOut` —
+                 * neither of which a transactional message should do.
+                 */
+                marketing: true,
+                /**
+                 * Quiet hours are NOT bypassed.
+                 *
+                 * Every transactional send in the product bypasses them because the
+                 * customer just asked for something. A marketing campaign is the exact
+                 * opposite — it is a cold contact, and the 8pm–9am window is what it
+                 * exists for.
+                 */
+              }
+            );
+
+            const channelResult = outcome.results.find((r) => r.channel === input.channel);
+
+            if (channelResult?.status === 'sent') {
+              result.sent++;
+            } else if (channelResult?.status === 'failed') {
+              result.failed++;
+              this.tally(result, channelResult.reason ?? 'send_error');
+            } else {
+              result.skipped++;
+              this.tally(result, channelResult?.reason ?? 'skipped');
+            }
+          } catch (err: any) {
+            result.failed++;
+            this.tally(result, 'unexpected_error');
+            log.error('campaign_recipient_failed', {
+              businessId: String(businessId),
+              customerId: String(recipient._id),
+              reason: err?.message,
+            });
           }
-        );
-
-        const channelResult = outcome.results.find((r) => r.channel === input.channel);
-
-        if (channelResult?.status === 'sent') {
-          result.sent++;
-        } else if (channelResult?.status === 'failed') {
-          result.failed++;
-          this.tally(result, channelResult.reason ?? 'send_error');
-        } else {
-          result.skipped++;
-          this.tally(result, channelResult?.reason ?? 'skipped');
-        }
-      } catch (err: any) {
-        result.failed++;
-        this.tally(result, 'unexpected_error');
-        log.error('campaign_recipient_failed', {
-          businessId: String(businessId),
-          customerId: String(recipient._id),
-          reason: err?.message,
-        });
-      }
+        })
+      );
     }
 
     segment.lastCampaignAt = new Date();

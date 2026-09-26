@@ -311,6 +311,39 @@ export interface Technician {
   active: boolean;
 }
 
+/**
+ * One technician weighed against a job.
+ *
+ * The reasoning is returned rather than a score, because a dispatcher overriding a
+ * suggestion needs to see why the alternative lost. A number cannot be argued with, and an
+ * assignment nobody can argue with is one nobody will trust.
+ */
+export interface TechnicianCandidate {
+  technicianId: string;
+  name: string;
+  phone: string;
+  skills: string[];
+  status: string;
+  /** Assigned to the zone covering the job's ZIP. */
+  inZone: boolean;
+  /** `null` when no particular skill was required — not the same as "does not hold it". */
+  hasSkill: boolean | null;
+  /** Overlaps the requested window. Always false when no window was sent. */
+  busy: boolean;
+  jobsThatDay: number;
+  /** Could actually take the job. Only busyness disqualifies. */
+  eligible: boolean;
+}
+
+export interface TechnicianMatch {
+  suggested: TechnicianCandidate | null;
+  /** The whole working roster, best first. */
+  candidates: TechnicianCandidate[];
+  matchedZone: { _id: string; name: string } | null;
+  /** Plain language, built only from what was actually checked. */
+  reason: string;
+}
+
 export class DispatchService {
   public static async getZones(): Promise<ServiceZone[]> {
     const json = await apiClient.get<{ zones?: ServiceZone[] }>('/api/dispatch/zones');
@@ -347,4 +380,155 @@ export class DispatchService {
     );
     return json.technician;
   }
+
+  /**
+   * Asks who should take a job. Suggests; never assigns.
+   *
+   * The endpoint existed with no caller in the product, so its answer reached nobody. Send
+   * `customerId` and `serviceId` rather than a ZIP and a skill tag: the server derives both
+   * from those records, which keeps the ZIP used to pick a technician identical to the one
+   * the travel fee is calculated from.
+   *
+   * `startAt` matters — without a window nobody can be ruled out as busy, and the reason
+   * string will honestly omit any availability claim.
+   */
+  public static async suggestTechnician(input: {
+    customerId?: string;
+    serviceId?: string;
+    zipCode?: string;
+    requiredSkill?: string;
+    startAt?: string;
+    endAt?: string;
+  }): Promise<TechnicianMatch> {
+    return apiClient.post<TechnicianMatch>('/api/dispatch/match-tech', input);
+  }
+
+  /**
+   * Fetches enriched dispatch map data for the selected date.
+   */
+  public static async getMapData(date?: string): Promise<MapDataResponse> {
+    return apiClient.get<MapDataResponse>(
+      `/api/dispatch/map-data${date ? `?date=${encodeURIComponent(date)}` : ''}`
+    );
+  }
+
+  /**
+   * Computes the ordered daily itinerary for a technician.
+   */
+  public static async getDailyRoute(
+    technicianId: string,
+    date?: string
+  ): Promise<DailyRouteResponse> {
+    return apiClient.get<DailyRouteResponse>(
+      `/api/dispatch/route?technicianId=${encodeURIComponent(technicianId)}${
+        date ? `&date=${encodeURIComponent(date)}` : ''
+      }`
+    );
+  }
+
+  /**
+   * Dispatches the daily route to the technician's phone via SMS with turn-by-turn navigation.
+   */
+  public static async sendDailyRoute(
+    technicianId: string,
+    date?: string
+  ): Promise<{
+    success: boolean;
+    routeSummary: string;
+    mapsUrl: string;
+    technicianName: string;
+    technicianNotified: boolean;
+    dispatchedToPhone?: string;
+    totalStops: number;
+    totalMiles: number;
+  }> {
+    return apiClient.post('/api/dispatch/send-route', { technicianId, date });
+  }
+}
+
+export interface MapDataResponse {
+  success: boolean;
+  appointments: Array<{
+    _id: string;
+    title: string;
+    startAt: string;
+    endAt?: string;
+    status: string;
+    priority: string;
+    address: string;
+    coordinates?: { lat: number; lng: number } | null;
+    customerId?: {
+      _id: string;
+      firstName: string;
+      lastName: string;
+      phone: string;
+      address?: any;
+    };
+    serviceId?: {
+      _id: string;
+      name: string;
+    };
+    technicianId?: {
+      _id: string;
+      name: string;
+      phone?: string;
+      status?: string;
+    };
+    technicianName?: string;
+  }>;
+  technicians: Array<{
+    _id: string;
+    name: string;
+    phone: string;
+    skills: string[];
+    status: string;
+    homeBase?: {
+      address: string;
+      coordinates?: { lat: number; lng: number };
+    };
+  }>;
+  zones: ServiceZone[];
+  stats: {
+    totalAppointments: number;
+    geocodedAppointments: number;
+    assignedAppointments: number;
+    unassignedAppointments: number;
+  };
+}
+
+export interface DailyRouteResponse {
+  success: boolean;
+  route: {
+    technician: {
+      _id: string;
+      name: string;
+      phone: string;
+      status: string;
+    };
+    date: string;
+    homeBase: {
+      address: string;
+      coordinates: { lat: number; lng: number };
+    };
+    orderedStops: Array<{
+      id: string;
+      stopNumber: number;
+      title: string;
+      customerName: string;
+      address: string;
+      coordinates?: { lat: number; lng: number };
+      startAt: string;
+      endAt?: string;
+      status: string;
+      legFromPrevious: {
+        distanceMiles: number;
+        durationMinutes: number;
+      };
+    }>;
+    totalDistanceMiles: number;
+    totalDriveTimeMinutes: number;
+    naiveMiles: number;
+    savedMiles: number;
+    efficiencyPercent: number;
+  };
 }

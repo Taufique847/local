@@ -137,6 +137,26 @@ export class TwilioService {
         statusCallbackMethod: 'POST',
       });
 
+      // Carrier A2P 10DLC Compliance:
+      // Attach newly provisioned phone number to registered Twilio Messaging Service to avoid carrier filtering & fines
+      if (config.twilioMessagingServiceSid) {
+        try {
+          await (client.messaging as any)
+            .services(config.twilioMessagingServiceSid)
+            .phoneNumbers.create({ phoneNumberSid: bought.sid });
+          logger.info('twilio_number_linked_to_10dlc_service', {
+            phoneNumber: bought.phoneNumber,
+            phoneNumberSid: bought.sid,
+            messagingServiceSid: config.twilioMessagingServiceSid,
+          });
+        } catch (linkErr: any) {
+          logger.warn('twilio_number_10dlc_link_warning', {
+            phoneNumber: bought.phoneNumber,
+            reason: linkErr?.message,
+          });
+        }
+      }
+
       return {
         phoneNumber: bought.phoneNumber,
         phoneNumberSid: bought.sid,

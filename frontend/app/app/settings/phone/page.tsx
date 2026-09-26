@@ -596,29 +596,31 @@ export default function PhoneSettingsPage() {
                 </button>
               </div>
 
-              {/* Segmented Tab Bar */}
+              {/* Segmented Tab Bar: Choice between Purchase New or Connect Own Number */}
               <div className="grid grid-cols-2 p-1 bg-slate-100 rounded-xl text-xs font-semibold">
                 <button
                   type="button"
                   onClick={() => setActiveModalTab('search')}
-                  className={`py-2 px-3 rounded-lg transition-all ${
+                  className={`py-2 px-3 rounded-lg transition-all flex items-center justify-center gap-1.5 ${
                     activeModalTab === 'search'
                       ? 'bg-white text-slate-900 shadow-2xs font-bold'
                       : 'text-slate-500 hover:text-slate-900'
                   }`}
                 >
-                  Search &amp; Claim Number
+                  <Search className="w-3.5 h-3.5" />
+                  <span>1. Purchase New Number</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setActiveModalTab('manual')}
-                  className={`py-2 px-3 rounded-lg transition-all ${
+                  className={`py-2 px-3 rounded-lg transition-all flex items-center justify-center gap-1.5 ${
                     activeModalTab === 'manual'
                       ? 'bg-white text-slate-900 shadow-2xs font-bold'
                       : 'text-slate-500 hover:text-slate-900'
                   }`}
                 >
-                  Connect Existing Twilio SID
+                  <Phone className="w-3.5 h-3.5" />
+                  <span>2. Connect Own Number</span>
                 </button>
               </div>
 
@@ -695,9 +697,18 @@ export default function PhoneSettingsPage() {
                 </div>
               )}
 
-              {/* Tab 2: Register Existing Twilio Number */}
+              {/* Tab 2: Register Existing Number / BYO */}
               {activeModalTab === 'manual' && (
                 <form onSubmit={handleManualAssign} className="space-y-4">
+                  <div className="p-3 bg-blue-50/70 border border-blue-200/80 rounded-xl text-[11px] text-blue-800 space-y-1">
+                    <p className="font-semibold text-blue-900 flex items-center gap-1.5">
+                      <Phone className="w-3.5 h-3.5 text-blue-600" />
+                      Bring Your Own Business Number (BYO)
+                    </p>
+                    <p className="text-blue-700/90 leading-relaxed">
+                      Connect your existing number from your own Twilio account or carrier (Verizon, AT&amp;T, T-Mobile, Google Voice). Once registered, you can route incoming calls directly or use carrier call forwarding to your AI receptionist.
+                    </p>
+                  </div>
                   <div className="space-y-3">
                     <div>
                       <label className="block text-xs font-semibold text-slate-700 mb-1">

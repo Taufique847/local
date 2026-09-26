@@ -11,6 +11,13 @@ export interface ITechnician extends Document {
   assignedZoneIds: Types.ObjectId[];
   status: TechnicianStatus;
   active: boolean;
+  homeBase?: {
+    address: string;
+    coordinates?: {
+      lat: number;
+      lng: number;
+    };
+  };
   createdAt: Date;
   updatedAt: Date;
 }
@@ -59,6 +66,13 @@ const TechnicianSchema = new Schema<ITechnician>(
       type: Boolean,
       default: true,
       index: true,
+    },
+    homeBase: {
+      address: { type: String, trim: true },
+      coordinates: {
+        lat: { type: Number },
+        lng: { type: Number },
+      },
     },
   },
   {

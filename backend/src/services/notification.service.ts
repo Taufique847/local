@@ -124,7 +124,7 @@ export class NotificationService {
         businessId,
         type,
         {
-          customerId: String(appointment.customerId),
+          customerId: this.extractEntityId(appointment.customerId)!,
           appointmentId: String(appointment._id),
         },
         {
@@ -188,8 +188,8 @@ export class NotificationService {
         invoice.businessId,
         type,
         {
-          customerId: String(invoice.customerId),
-          appointmentId: invoice.appointmentId ? String(invoice.appointmentId) : undefined,
+          customerId: this.extractEntityId(invoice.customerId)!,
+          appointmentId: this.extractEntityId(invoice.appointmentId),
         },
         {
           documentNumber: invoice.invoiceNumber,
@@ -214,6 +214,13 @@ export class NotificationService {
       });
       return { type, results: [{ channel: 'email', status: 'failed', reason: 'unexpected_error' }], sentAny: false };
     }
+  }
+
+  private static extractEntityId(idOrDoc: any): string | undefined {
+    if (!idOrDoc) return undefined;
+    if (typeof idOrDoc === 'string') return idOrDoc;
+    if (idOrDoc._id) return String(idOrDoc._id);
+    return String(idOrDoc);
   }
 
   private static paymentMethodLabel(method?: string): string | undefined {
@@ -250,8 +257,8 @@ export class NotificationService {
         estimate.businessId,
         'estimate_sent',
         {
-          customerId: String(estimate.customerId),
-          appointmentId: estimate.appointmentId ? String(estimate.appointmentId) : undefined,
+          customerId: this.extractEntityId(estimate.customerId)!,
+          appointmentId: this.extractEntityId(estimate.appointmentId),
         },
         {
           documentNumber: estimate.estimateNumber,
@@ -569,7 +576,19 @@ export class NotificationService {
 
     if (options.marketing && recipient.customerId) {
       const link = unsubscribeUrl(recipient.customerId, String(businessId));
-      bodyText = `${text}\n\n---\nDon't want these emails? Unsubscribe: ${link}`;
+      // CAN-SPAM Act (15 U.S.C. § 7704(a)(5)): Commercial email must include sender physical postal address
+      const biz = await Business.findById(businessId).select('name address').lean();
+      const addrParts = [
+        biz?.address?.street,
+        biz?.address?.city,
+        biz?.address?.state ? `${biz.address.state}${biz.address.zip ? ' ' + biz.address.zip : ''}` : biz?.address?.zip,
+      ].filter(Boolean);
+      const physicalAddress = addrParts.length ? addrParts.join(', ') : '';
+      const addressFooter = physicalAddress
+        ? `\n${biz?.name || businessName}\n${physicalAddress}`
+        : `\n${biz?.name || businessName}`;
+
+      bodyText = `${text}\n\n---\nDon't want these emails? Unsubscribe: ${link}\n${addressFooter}`;
       unsubscribeHeaders = {
         'List-Unsubscribe': `<${link}>`,
         'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',

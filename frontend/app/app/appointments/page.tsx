@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { DashboardShell } from '@/components/dashboard/dashboard-shell';
 import { AppointmentService } from '@/services/appointment.service';
 import { AppointmentModal } from '@/components/appointments/appointment-modal';
+import { DispatchMapView } from '@/components/appointments/dispatch-map-view';
 import { BusinessService } from '@/services/business.service';
 import { Appointment, AppointmentStatus } from '@/types/appointment';
 import { Business } from '@/types/business';
@@ -627,9 +628,8 @@ export default function AppointmentsPage() {
               >
                 <MapPin className="w-3.5 h-3.5 text-blue-600" />
                 Route Map
-                {/* Labelled so nobody expects working routing behind it. */}
-                <span className="text-[9px] font-bold uppercase tracking-wider text-amber-600">
-                  Soon
+                <span className="text-[9px] font-bold uppercase tracking-wider text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded-full border border-emerald-200">
+                  Live
                 </span>
               </button>
             </div>
@@ -1516,93 +1516,11 @@ export default function AppointmentsPage() {
             )}
           </div>
         ) : (
-          /* ================= DISPATCH ROUTE MAP — NOT BUILT ================= */
-          /*
-           * This tab previously rendered a complete fabrication presented as live
-           * data: a "32% Drive-Time Saved" badge, "38.4 Miles", "1 hr 14 mins",
-           * "+$64 / Day Saved", invented per-leg drive times, three hardcoded
-           * Dallas map pins with a literal coordinate readout, three invented
-           * customers shown whenever there was no real data, and a "Dispatch Route
-           * to Techs" button that fired a toast claiming a route had been sent
-           * while calling no API at all.
-           *
-           * None of it was real. There is no geocoding in the backend, no
-           * coordinates on a technician or a job, and no routing algorithm — the
-           * only real dispatch output is an SMS containing a Google Maps link to
-           * the job's text address.
-           *
-           * Showing invented operational numbers is worse than showing nothing: a
-           * dispatcher plans a day around them.
-           */
-          <div className="bg-white border border-slate-200/90 rounded-2xl p-6 sm:p-8 shadow-xs">
-            <div className="mx-auto max-w-xl space-y-5 text-center">
-              <div
-                className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl border border-amber-200 bg-amber-50 text-amber-600"
-                aria-hidden="true"
-              >
-                <Construction className="h-6 w-6" />
-              </div>
-
-              <div className="space-y-1.5">
-                <span className="inline-block rounded-full border border-slate-200 bg-slate-50 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                  Not available yet
-                </span>
-                <h2 className="text-lg font-bold text-slate-900">
-                  Route optimisation is not built
-                </h2>
-                <p className="mx-auto max-w-md text-sm text-slate-600 leading-relaxed">
-                  Real routing needs job addresses converted to coordinates and a home
-                  base for each technician. Neither exists yet, so any map, mileage or
-                  time saving shown here would be invented.
-                </p>
-              </div>
-
-              <ul className="mx-auto max-w-sm space-y-1.5 rounded-xl border border-slate-200 bg-slate-50 p-4 text-left">
-                {[
-                  'Geocoded job sites and technician home bases',
-                  'Ordered stops per technician per day, with real distance and drive time',
-                  'A live map with job pins, technician positions and zone overlays',
-                  'Send the ordered route to each technician',
-                ].map((item) => (
-                  <li key={item} className="flex items-start gap-2 text-xs text-slate-600">
-                    <span
-                      className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-slate-400"
-                      aria-hidden="true"
-                    />
-                    <span>{item}</span>
-                  </li>
-                ))}
-              </ul>
-
-              {/* What genuinely works today, so the tab is not a dead end. */}
-              <div className="rounded-xl border border-blue-100 bg-blue-50/60 p-4 text-left">
-                <p className="text-xs font-bold text-blue-900 mb-1.5">
-                  What you can use today
-                </p>
-                <p className="text-xs text-blue-800/90 leading-relaxed">
-                  Assign a technician when you book a job, and match callers to the
-                  right technician by ZIP code using{' '}
-                  <Link
-                    href="/app/settings"
-                    className="font-semibold text-blue-700 underline hover:text-blue-900"
-                  >
-                    service zones
-                  </Link>
-                  . Dispatching a job texts the technician the customer&apos;s address
-                  with a Google Maps link.
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setViewMode('list')}
-                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50"
-              >
-                <List className="h-4 w-4" aria-hidden="true" />
-                Back to the job list
-              </button>
-            </div>
-          </div>
+          /* ================= DAY 21-23: REAL DISPATCH FLEET MAP & ROUTES ================= */
+          <DispatchMapView
+            selectedDate={selectedDate}
+            onRefreshNeeded={fetchAppointments}
+          />
         )}
 
         {/* Appointment Modal */}

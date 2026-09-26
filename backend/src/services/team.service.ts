@@ -374,7 +374,7 @@ export class TeamService {
     businessId: string,
     callerId: string,
     memberId: string,
-    changes: { businessRole?: string; isActive?: boolean }
+    changes: { businessRole?: string; isActive?: boolean; technicianId?: string | null }
   ): Promise<TeamMemberDTO> {
     if (!Types.ObjectId.isValid(memberId)) {
       throw new AppError('Team member not found.', 404);
@@ -409,6 +409,43 @@ export class TeamService {
         member.technicianId = null;
       }
       member.businessRole = next;
+    }
+
+    // Explicit technician link or un-link
+    if (changes.technicianId !== undefined) {
+      if (changes.technicianId === null) {
+        member.technicianId = null;
+      } else {
+        if (!Types.ObjectId.isValid(changes.technicianId)) {
+          throw new AppError('Invalid technician ID.', 400);
+        }
+        const tech = await Technician.findOne({ _id: changes.technicianId, businessId });
+        if (!tech) {
+          throw new AppError('Technician record not found.', 404);
+        }
+        member.technicianId = tech._id;
+      }
+    }
+
+    // If promoted to technician without an explicit technician record, ensure they are linked
+    // to an existing or auto-created technician profile so the worker PWA is never locked with 409.
+    if (member.businessRole === 'technician' && !member.technicianId) {
+      const existingTech = await Technician.findOne({
+        businessId,
+        $or: [{ email: member.email }, { name: member.name }],
+      });
+      if (existingTech) {
+        member.technicianId = existingTech._id;
+      } else {
+        const newTech = await Technician.create({
+          businessId,
+          name: member.name,
+          email: member.email,
+          phone: (member as any).phone || '000-000-0000',
+          active: true,
+        });
+        member.technicianId = newTech._id;
+      }
     }
 
     if (changes.isActive !== undefined) {

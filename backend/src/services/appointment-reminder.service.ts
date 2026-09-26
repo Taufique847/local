@@ -2,6 +2,7 @@ import { Types } from 'mongoose';
 import { Appointment } from '../models/appointment.model';
 import { BusinessPolicy } from '../models/business-policy.model';
 import { Business } from '../models/business.model';
+import { Customer } from '../models/customer.model';
 import { NotificationService } from './notification.service';
 import { CommunicationService } from './communication.service';
 import { AppointmentStatus } from '../types/appointment.types';
@@ -92,7 +93,7 @@ export class AppointmentReminderService {
         { reminderAttempts: { $lt: this.MAX_ATTEMPTS } },
       ],
     })
-      .select('_id businessId startAt status reminderAttempts')
+      .select('_id businessId customerId startAt status reminderAttempts')
       .sort({ startAt: 1 })
       // Bounded so one tick cannot run unboundedly long and overrun its lock.
       // Anything left over is picked up on the next tick fifteen minutes later,
@@ -176,8 +177,15 @@ export class AppointmentReminderService {
          *
          * A reminder is not exempt from quiet hours the way a confirmation is: the
          * customer did not just ask for it, so a 2am text is a cold contact.
+         * TCPA compliance: quiet hours must be evaluated in recipient's local timezone.
          */
-        if (CommunicationService.isWithinQuietHours(settings.timezone)) {
+        let customerPhone: string | undefined;
+        if (candidate.customerId) {
+          const cust = await Customer.findById(candidate.customerId).select('phone').lean();
+          customerPhone = cust?.phone;
+        }
+        const recipientTz = CommunicationService.resolveRecipientTimezone(customerPhone, settings.timezone);
+        if (CommunicationService.isWithinQuietHours(recipientTz, now, customerPhone)) {
           counts.deferred++;
           continue;
         }

@@ -91,6 +91,10 @@ export interface IAppointment extends Document {
   priority: AppointmentPriority;
   source: AppointmentSource;
   address?: string;
+  coordinates?: {
+    lat: number;
+    lng: number;
+  };
   technicianName?: string;
   customerNotes?: string;
   internalNotes?: string;
@@ -127,6 +131,10 @@ export interface CreateAppointmentInput {
   endAt?: string;
   description?: string;
   address?: string;
+  coordinates?: {
+    lat: number;
+    lng: number;
+  };
   /**
    * The technician this job is assigned to.
    *

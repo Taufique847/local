@@ -10,6 +10,10 @@ export interface ICustomerAddress {
   city?: string;
   state?: string;
   zip?: string;
+  coordinates?: {
+    lat: number;
+    lng: number;
+  };
 }
 
 /**
@@ -64,6 +68,9 @@ export interface ICustomer extends Document {
    */
   emailOptedOut?: boolean;
   emailOptedOutAt?: Date | null;
+  /** Explicit Prior Express Written Consent (PEWC) for TCPA marketing campaigns. */
+  marketingConsentGiven?: boolean;
+  marketingConsentTimestamp?: Date | null;
   /**
    * Residential or commercial.
    *
@@ -104,6 +111,8 @@ export interface CustomerDTO {
   /** Marketing email consent. Separate from `isOptedOut`, which is SMS. */
   emailOptedOut?: boolean;
   emailOptedOutAt?: string | Date | null;
+  marketingConsentGiven?: boolean;
+  marketingConsentTimestamp?: string | Date | null;
   propertyType?: CustomerPropertyType;
   property?: ICustomerProperty;
   status: CustomerStatus;
@@ -124,6 +133,7 @@ export interface CustomerInput {
   notes?: string;
   status?: CustomerStatus;
   source?: string;
+  marketingConsentGiven?: boolean;
   propertyType?: CustomerPropertyType;
   property?: ICustomerProperty;
 }

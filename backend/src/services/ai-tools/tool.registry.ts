@@ -10,6 +10,7 @@ import { KnowledgeBaseService } from '../knowledge-base.service';
 import { Business } from '../../models/business.model';
 import { TwilioService } from '../twilio.service';
 import { PolicyGuardrailsService } from '../policy-guardrails.service';
+import { escapeRegex } from '../../utils/format';
 
 export class ToolRegistry {
   private static tools: Map<string, IToolDefinition> = new Map();
@@ -87,7 +88,7 @@ export class ToolRegistry {
         let customer = await Customer.findOne({ businessId: ctx.businessId, phone });
 
         if (!customer && args.name) {
-          const regex = new RegExp(args.name.trim(), 'i');
+          const regex = new RegExp(escapeRegex(args.name.trim()), 'i');
           customer = await Customer.findOne({
             businessId: ctx.businessId,
             $or: [{ firstName: regex }, { lastName: regex }],
@@ -251,7 +252,7 @@ export class ToolRegistry {
               name: 'HVAC Diagnostic & Repair',
               durationMinutes: 60,
               startingPrice: 99,
-              category: 'repair',
+              category: 'Maintenance',
             });
             serviceId = newService._id.toString();
           }
@@ -309,18 +310,25 @@ export class ToolRegistry {
       },
       execute: async (args, ctx) => {
         const to = args.to || ctx.callerPhone;
-        const msg = await CommunicationService.sendMessage(ctx.businessId, {
-          to,
-          body: args.message,
-          type: 'custom',
-          bypassQuietHours: true,
-        });
+        try {
+          const msg = await CommunicationService.sendMessage(ctx.businessId, {
+            to,
+            body: args.message,
+            type: 'custom',
+            bypassQuietHours: false, // Enforce TCPA quiet hours
+          });
 
-        return {
-          success: true,
-          messageId: msg._id.toString(),
-          status: msg.status,
-        };
+          return {
+            success: true,
+            messageId: msg._id.toString(),
+            status: msg.status,
+          };
+        } catch (err: any) {
+          return {
+            success: false,
+            error: err.message || 'SMS send blocked due to quiet hours or delivery limits',
+          };
+        }
       },
     });
 

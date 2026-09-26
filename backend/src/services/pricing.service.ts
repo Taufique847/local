@@ -36,7 +36,16 @@ export interface PricingLineItem {
   unitPrice: number;
   /** Computed. Any value passed in is recalculated, not trusted. */
   total?: number;
+  /**
+   * Whether this line item is subject to sales tax.
+   * Under US state tax codes (e.g. Texas Tax Code § 151.0101, FL, NJ),
+   * residential repair and installation labor is strictly tax-exempt,
+   * whereas tangible personal property (parts, equipment, materials) is taxable.
+   * Defaults to true for backward compatibility.
+   */
+  taxable?: boolean;
 }
+
 
 export type DiscountType = 'percentage' | 'fixed';
 
@@ -138,6 +147,7 @@ export class PricingService {
         quantity,
         unitPrice,
         total: toDollars(Math.round(toCents(unitPrice) * quantity)),
+        taxable: item.taxable !== false,
       };
     });
 
@@ -161,6 +171,7 @@ export class PricingService {
         quantity: 1,
         unitPrice: emergencyFee,
         total: emergencyFee,
+        taxable: true,
       });
       subtotalCents += toCents(emergencyFee);
     }
@@ -173,6 +184,7 @@ export class PricingService {
         quantity: 1,
         unitPrice: travelFee,
         total: travelFee,
+        taxable: true,
       });
       subtotalCents += toCents(travelFee);
     }
@@ -198,10 +210,25 @@ export class PricingService {
      * nobody can check. The cap is asserted where it is actually made, at both of its
      * boundaries.
      */
-    const taxableCents = discountBaseCents - discountAmountCents;
+    const netBaseCents = discountBaseCents - discountAmountCents;
+
+    /**
+     * Under US State tax rules (e.g. Texas Tax Code § 151.0101, FL, NJ, etc.),
+     * residential repair and installation labor is strictly tax-exempt,
+     * whereas tangible personal property (parts, equipment, materials) is taxable.
+     * If all items are taxable (standard default), ratio is 1.0 (exact backward compatibility).
+     * If labor is specified as exempt (taxable: false), only taxable items receive sales tax.
+     */
+    const taxableItemsCents = items
+      .filter((item) => item.taxable !== false)
+      .reduce((sum, item) => sum + toCents(item.total), 0);
+
+    const taxableRatio = subtotalCents > 0 ? taxableItemsCents / subtotalCents : 1;
+    const taxableCents = Math.round(netBaseCents * taxableRatio);
 
     const taxRate = this.resolveTaxRate(input.taxRate ?? policy.taxRate);
     const taxCents = Math.round(taxableCents * taxRate);
+
 
     return {
       items,
@@ -229,9 +256,10 @@ export class PricingService {
        * a third addend or a larger magnitude, the argument is what would quietly stop
        * holding — and it would stop holding on a customer's bill.
        */
-      totalAmount: toDollars(taxableCents + taxCents),
+      totalAmount: toDollars(netBaseCents + taxCents),
     };
   }
+
 
   private static resolveTaxRate(rate: unknown): number {
     const value = Number(rate);

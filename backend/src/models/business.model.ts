@@ -127,6 +127,16 @@ const businessSchema = new Schema<IBusiness>(
       enum: ['business', 'services', 'service_area', 'hours', 'phone', 'review', 'completed'],
       default: 'business',
     },
+    stripeAccountId: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    stripeAccountStatus: {
+      type: String,
+      enum: ['pending', 'active', 'restricted'],
+      default: null,
+    },
   },
   {
     timestamps: true,

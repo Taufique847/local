@@ -8,6 +8,7 @@ import {
 } from '../types/customer.types';
 import { AppError } from '../types';
 import { buildCustomerQuery, sanitiseCustomerFilter } from './customer-filter';
+import { encryptField, decryptField } from '../utils/crypto';
 
 /**
  * Tags, normalised the same way everywhere.
@@ -56,9 +57,16 @@ export class CustomerService {
       // customer is excluded from an email campaign audience.
       emailOptedOut: Boolean(customer.emailOptedOut),
       emailOptedOutAt: customer.emailOptedOutAt,
+      marketingConsentGiven: Boolean(customer.marketingConsentGiven),
+      marketingConsentTimestamp: customer.marketingConsentTimestamp ?? null,
       propertyType: customer.propertyType,
-      // Access and property facts, previously trapped in free-text memory rows.
-      property: customer.property,
+      // Access and property facts, decrypted for client view
+      property: customer.property
+        ? {
+            ...customer.property,
+            gateCode: decryptField(customer.property.gateCode),
+          }
+        : undefined,
       status: customer.status,
       source: customer.source,
       createdAt: customer.createdAt,
@@ -78,6 +86,11 @@ export class CustomerService {
       throw new AppError('Phone number is required', 400);
     }
 
+    const property = input.property ? { ...input.property } : undefined;
+    if (property?.gateCode && typeof property.gateCode === 'string') {
+      property.gateCode = encryptField(property.gateCode);
+    }
+
     const customer = await Customer.create({
       businessId,
       firstName: input.firstName.trim(),
@@ -89,7 +102,9 @@ export class CustomerService {
       status: input.status || 'active',
       source: input.source || 'manual',
       propertyType: input.propertyType,
-      property: input.property,
+      property,
+      marketingConsentGiven: Boolean(input.marketingConsentGiven),
+      marketingConsentTimestamp: input.marketingConsentGiven ? new Date() : null,
       // Accepted by the validation schema and then dropped here, so a customer
       // created with tags came back without them.
       tags: normaliseTags(input.tags),
@@ -169,6 +184,11 @@ export class CustomerService {
     // update accepted `tags` in its schema and then never applied them.
     if (input.tags !== undefined) customer.tags = normaliseTags(input.tags);
 
+    if (input.marketingConsentGiven !== undefined) {
+      customer.marketingConsentGiven = Boolean(input.marketingConsentGiven);
+      customer.marketingConsentTimestamp = input.marketingConsentGiven ? new Date() : null;
+    }
+
     /**
      * Merged, not replaced, and field by field.
      *
@@ -183,7 +203,11 @@ export class CustomerService {
       for (const [key, value] of Object.entries(input.property)) {
         if (value === undefined) continue;
         if (value === '') delete merged[key];
-        else merged[key] = value;
+        else if (key === 'gateCode' && typeof value === 'string') {
+          merged[key] = encryptField(value);
+        } else {
+          merged[key] = value;
+        }
       }
       customer.property = merged as any;
     }

@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import net from 'net';
 import { EstimateService } from '../services/estimate.service';
 import { InvoiceService } from '../services/invoice.service';
 import { BillingService } from '../services/billing.service';
@@ -65,13 +66,22 @@ export class PortalController {
   public static async approveEstimate(req: Request, res: Response, next: NextFunction) {
     try {
       const { signedByName, signatureDataUrl, selectedTierId } = req.body;
-      const ipAddress = req.ip || (req.headers['x-forwarded-for'] as string);
+      
+      // Securely resolve client IP for legal E-SIGN audit trail (Federal E-SIGN Act 15 U.S.C. § 7001).
+      // Express trust proxy (app.set('trust proxy', 1)) populates req.ip.
+      // Strip IPv6-mapped IPv4 prefix and validate through net.isIP to prevent header injection or spoofing.
+      const rawCandidate = req.ip || req.socket.remoteAddress || '';
+      const firstCandidate = typeof rawCandidate === 'string' ? rawCandidate.split(',')[0].trim() : '';
+      const cleanCandidate = firstCandidate.replace(/^::ffff:/, '');
+      const ipAddress = net.isIP(cleanCandidate) ? cleanCandidate : (req.socket.remoteAddress || '127.0.0.1');
+
       const estimate = await EstimateService.approveEstimate(req.params.token, {
         signedByName: typeof signedByName === 'string' ? signedByName.trim().slice(0, 120) : '',
         signatureDataUrl,
         ipAddress,
         selectedTierId,
       });
+
       res.status(200).json({ success: true, estimate });
     } catch (err) {
       next(err);

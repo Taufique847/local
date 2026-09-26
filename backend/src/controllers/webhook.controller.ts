@@ -31,7 +31,7 @@ export class WebhookController {
       }
 
       // Record call log and resolve business
-      const { business } = await CallService.handleInboundWebhook(req.body);
+      const { business, callLog } = await CallService.handleInboundWebhook(req.body);
 
       const baseUrl = config.twilioWebhookBaseUrl || 'http://localhost:5000';
       const wsUrl = baseUrl.replace(/^http/, 'ws') + '/api/voice/media-stream';
@@ -54,6 +54,14 @@ export class WebhookController {
         }
       }
 
+      const disclosure = await WebhookController.resolveDisclosure(business, From);
+      if (callLog && disclosure) {
+        callLog.disclosurePlayed = true;
+        callLog.disclosurePlayedAt = new Date();
+        callLog.disclosureText = disclosure;
+        await callLog.save().catch((e: any) => log.warn('could_not_save_disclosure_audit', { err: e?.message }));
+      }
+
       const useStream =
         config.voiceProvider !== 'off' &&
         (req.query.stream === 'true' || req.body.Stream === 'true' || config.voiceProvider === 'realtime');
@@ -62,7 +70,7 @@ export class WebhookController {
         ? TwilioService.generateMediaStreamTwiML(
             wsUrl,
             { from: From, to: To, callSid: CallSid },
-            { disclosure: await WebhookController.resolveDisclosure(business) }
+            { disclosure }
           )
         : TwilioService.generateWelcomeTwiML(business?.name || 'our business');
 
@@ -152,11 +160,11 @@ export class WebhookController {
    * A policy lookup failure must never block the call, and it must never
    * silently drop the notice either — so the generated default is used.
    */
-  private static async resolveDisclosure(business: any): Promise<string | null> {
+  private static async resolveDisclosure(business: any, callerPhone?: string): Promise<string | null> {
     const businessName = business?.name || undefined;
 
     try {
-      if (!business?._id) return buildAiDisclosure({ businessName });
+      if (!business?._id) return buildAiDisclosure({ businessName, callerPhone, businessState: business?.address?.state });
 
       const policy = await PolicyGuardrailsService.getPolicy(business._id);
       return buildAiDisclosure({
@@ -164,12 +172,16 @@ export class WebhookController {
         enabled: policy?.aiDisclosureEnabled,
         customText: policy?.aiDisclosureText,
         canTransfer: Boolean(policy?.emergencyTransferPhone || business?.phone),
+        callerPhone,
+        businessState: business?.address?.state,
       });
     } catch (err: any) {
       log.warn('disclosure_policy_lookup_failed', { reason: err?.message });
       return buildAiDisclosure({
         businessName,
         canTransfer: Boolean(business?.phone),
+        callerPhone,
+        businessState: business?.address?.state,
       });
     }
   }

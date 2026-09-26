@@ -81,6 +81,9 @@ export interface ICallLog extends Document {
   sentiment?: CallSentiment;
   summary?: string;
   aiHandled?: boolean;
+  disclosurePlayed?: boolean;
+  disclosurePlayedAt?: Date;
+  disclosureText?: string;
   transcript?: ITranscriptTurn[];
   toolExecutions?: IToolExecutionAudit[];
   metrics?: ICallMetrics;

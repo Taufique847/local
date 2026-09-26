@@ -82,6 +82,13 @@ export interface CreateAppointmentInput {
   internalNotes?: string;
   /** Technician record id. Omit to leave the job unassigned. */
   technicianId?: string;
+  /** Recurring series rule. Materialises appointments up to 120-day horizon. */
+  recurrence?: {
+    frequency: 'weekly' | 'monthly';
+    interval?: number;
+    count?: number;
+    until?: string;
+  };
 }
 
 export interface UpdateAppointmentInput {

@@ -2,6 +2,7 @@ import { Types } from 'mongoose';
 import { Lead } from '../models/lead.model';
 import { Customer } from '../models/customer.model';
 import { AppError } from '../types';
+import { escapeRegex } from '../utils/format';
 import { 
   ILead, 
   CreateLeadInput, 
@@ -187,7 +188,7 @@ export class LeadService {
     }
 
     if (query.search && query.search.trim()) {
-      const searchRegex = new RegExp(query.search.trim(), 'i');
+      const searchRegex = new RegExp(escapeRegex(query.search.trim()), 'i');
       const matchingCustomers = await Customer.find({
         businessId,
         $or: [

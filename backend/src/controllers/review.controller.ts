@@ -73,7 +73,7 @@ export class ReviewController {
       }
 
       const campaign = await ReviewReputationService.triggerPostServiceSurvey(appointmentId, {
-        bypassQuietHours: bypassQuietHours ?? true,
+        bypassQuietHours: bypassQuietHours ?? false,
       });
 
       sendSuccess(res, { success: true, campaign }, 200);

@@ -171,31 +171,73 @@ export class AvailabilityService {
     const open = parseTimeOfDay(dayHours.openTime, 8 * 60);
     const close = parseTimeOfDay(dayHours.closeTime, 18 * 60);
 
-    if (start.minutesOfDay < open) {
-      return {
-        ok: false,
-        reason: `That start time is before you open on ${start.weekday} (${dayHours.openTime || '08:00'}).`,
-      };
+    // 24/7 round-the-clock operation (e.g. 00:00 to 00:00 or open === close)
+    if (open === close) {
+      return { ok: true };
     }
 
-    /**
-     * A job that runs past closing is rejected, and a job that crosses midnight
-     * into the next day with it — the end lands on a different calendar day, so
-     * its minutes-of-day would compare as early morning and pass.
-     */
-    const endMinutes =
-      end.day === start.day && end.month === start.month && end.year === start.year
-        ? end.minutesOfDay
-        : close + 1;
+    if (close > open) {
+      // Standard daytime schedule (e.g. 08:00 to 18:00)
+      if (start.minutesOfDay < open) {
+        return {
+          ok: false,
+          reason: `That start time is before you open on ${start.weekday} (${dayHours.openTime || '08:00'}).`,
+        };
+      }
 
-    if (endMinutes > close) {
-      return {
-        ok: false,
-        reason: `That appointment would finish after you close on ${start.weekday} (${dayHours.closeTime || '18:00'}).`,
-      };
+      /**
+       * A job that runs past closing is rejected, and a job that crosses midnight
+       * into the next day with it — the end lands on a different calendar day, so
+       * its minutes-of-day would compare as early morning and pass.
+       */
+      const endMinutes =
+        end.day === start.day && end.month === start.month && end.year === start.year
+          ? end.minutesOfDay
+          : close + 1;
+
+      if (endMinutes > close) {
+        return {
+          ok: false,
+          reason: `That appointment would finish after you close on ${start.weekday} (${dayHours.closeTime || '18:00'}).`,
+        };
+      }
+
+      return { ok: true };
+    } else {
+      // Overnight schedule (e.g. 20:00 to 04:00 next day)
+      if (start.minutesOfDay >= open) {
+        const endMinutes =
+          end.day === start.day && end.month === start.month && end.year === start.year
+            ? end.minutesOfDay
+            : end.minutesOfDay + 24 * 60;
+
+        if (endMinutes > close + 24 * 60) {
+          return {
+            ok: false,
+            reason: `That appointment would finish after you close on ${start.weekday} (${dayHours.closeTime || '04:00'}).`,
+          };
+        }
+        return { ok: true };
+      } else if (start.minutesOfDay < close) {
+        const endMinutes =
+          end.day === start.day && end.month === start.month && end.year === start.year
+            ? end.minutesOfDay
+            : close + 1;
+
+        if (endMinutes > close) {
+          return {
+            ok: false,
+            reason: `That appointment would finish after you close (${dayHours.closeTime || '04:00'}).`,
+          };
+        }
+        return { ok: true };
+      } else {
+        return {
+          ok: false,
+          reason: `That start time is outside published hours on ${start.weekday} (${dayHours.openTime || '20:00'} to ${dayHours.closeTime || '04:00'}).`,
+        };
+      }
     }
-
-    return { ok: true };
   }
 
   /**
@@ -315,7 +357,10 @@ export class AvailabilityService {
     const intervalMinutes = 30;
     const now = Date.now();
 
-    for (let m = openTotalMins; m + durationMinutes <= closeTotalMins; m += intervalMinutes) {
+    const effectiveCloseTotalMins =
+      closeTotalMins <= openTotalMins ? closeTotalMins + 24 * 60 : closeTotalMins;
+
+    for (let m = openTotalMins; m + durationMinutes <= effectiveCloseTotalMins; m += intervalMinutes) {
       const slotStart = zonedWallClockToUtc(year, month, day, m, timezone);
 
       /**
@@ -328,7 +373,7 @@ export class AvailabilityService {
        * dropping the mismatch says "no such time today", which is the truth.
        */
       const readBack = zonedParts(slotStart, timezone);
-      if (!readBack || readBack.minutesOfDay !== m) continue;
+      if (!readBack || readBack.minutesOfDay !== (m % 1440)) continue;
 
       const slotEnd = new Date(slotStart.getTime() + durationMinutes * 60 * 1000);
 

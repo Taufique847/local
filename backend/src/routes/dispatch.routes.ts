@@ -2,7 +2,11 @@ import { Router } from 'express';
 import { DispatchController } from '../controllers/dispatch.controller';
 import { authMiddleware } from '../middleware/auth.middleware';
 import { validateBody } from '../middleware/validate';
-import { serviceZoneSchema, technicianSchema } from '../validation/schemas';
+import {
+  serviceZoneSchema,
+  technicianSchema,
+  matchTechnicianSchema,
+} from '../validation/schemas';
 
 const router = Router();
 
@@ -22,7 +26,16 @@ router.post(
 );
 
 // Routing
-router.post('/match-tech', DispatchController.matchTechnician as any);
+router.post(
+  '/match-tech',
+  validateBody(matchTechnicianSchema),
+  DispatchController.matchTechnician as any
+);
 router.post('/appointments/:id', DispatchController.dispatchAppointment as any);
+
+// Live map & Route optimization
+router.get('/map-data', DispatchController.getMapData as any);
+router.get('/route', DispatchController.getDailyRoute as any);
+router.post('/send-route', DispatchController.sendDailyRoute as any);
 
 export default router;

@@ -109,6 +109,10 @@ const appointmentSchema = new Schema<IAppointment>(
       type: String,
       trim: true,
     },
+    coordinates: {
+      lat: { type: Number },
+      lng: { type: Number },
+    },
     technicianId: {
       type: Schema.Types.ObjectId,
       ref: 'Technician',
@@ -240,14 +244,21 @@ const appointmentSchema = new Schema<IAppointment>(
         completed: { type: Boolean, default: false },
       },
     ],
-    photos: [
-      {
-        url: { type: String, required: true },
-        caption: { type: String },
-        phase: { type: String, enum: ['before', 'after'], default: 'before' },
-        uploadedAt: { type: Date, default: Date.now },
-      },
-    ],
+    photos: {
+      type: [
+        {
+          url: { type: String, required: true },
+          caption: { type: String, maxlength: 500 },
+          phase: { type: String, enum: ['before', 'after'], default: 'before' },
+          uploadedAt: { type: Date, default: Date.now },
+        },
+      ],
+      validate: [
+        (val: any[]) => !val || val.length <= 12,
+        'Maximum 12 photos allowed per appointment to prevent database bloat',
+      ],
+    },
+
     partsUsed: [
       {
         partName: { type: String, required: true },
